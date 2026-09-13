@@ -4,7 +4,6 @@ import time
 import shutil
 import threading
 import subprocess
-import platform
 import urllib.request
 import zipfile
 import stat
@@ -53,15 +52,16 @@ BOT_THREAD = None
 # ============================================================
 
 def run_command(cmd, timeout=300, env=None):
-    """
-    Run command and print stdout/stderr in real time.
-    Returns:
-        returncode, output
-    """
 
-    print("\n$ " + " ".join(map(str, cmd)), flush=True)
+    print(
+        "\n$ " + " ".join(map(str, cmd)),
+        flush=True,
+    )
+
+    process = None
 
     try:
+
         process = subprocess.Popen(
             [str(x) for x in cmd],
             stdout=subprocess.PIPE,
@@ -73,36 +73,72 @@ def run_command(cmd, timeout=300, env=None):
 
         output_lines = []
 
-        for line in process.stdout:
-            print(line, end="", flush=True)
-            output_lines.append(line)
+        start_time = time.time()
 
-        process.wait(timeout=timeout)
+        while True:
+
+            line = process.stdout.readline()
+
+            if line:
+
+                print(
+                    line,
+                    end="",
+                    flush=True,
+                )
+
+                output_lines.append(line)
+
+            elif process.poll() is not None:
+
+                break
+
+            # Hard timeout
+            if time.time() - start_time > timeout:
+
+                print(
+                    f"\nCOMMAND TIMEOUT after {timeout} seconds",
+                    flush=True,
+                )
+
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
+                try:
+                    process.wait(timeout=10)
+                except Exception:
+                    pass
+
+                return 124, "".join(output_lines)
+
+        return_code = process.returncode
 
         output = "".join(output_lines)
 
         print(
-            f"Exit code: {process.returncode}",
+            f"Exit code: {return_code}",
             flush=True,
         )
 
-        return process.returncode, output
-
-    except subprocess.TimeoutExpired:
-        try:
-            process.kill()
-        except Exception:
-            pass
-
-        print("COMMAND TIMEOUT", flush=True)
-        return 124, ""
+        return return_code, output
 
     except Exception as e:
+
+        if process is not None:
+
+            try:
+                process.kill()
+            except Exception:
+                pass
+
         print(
             "COMMAND ERROR:",
             repr(e),
             flush=True,
         )
+
         return 1, str(e)
 
 
@@ -111,6 +147,7 @@ def run_command(cmd, timeout=300, env=None):
 # ============================================================
 
 def build_environment():
+
     env = os.environ.copy()
 
     paths = [
@@ -119,9 +156,14 @@ def build_environment():
         str(FFMPEG_DIR),
     ]
 
-    old_path = env.get("PATH", "")
+    old_path = env.get(
+        "PATH",
+        "",
+    )
 
-    env["PATH"] = ":".join(paths + [old_path])
+    env["PATH"] = ":".join(
+        paths + [old_path]
+    )
 
     return env
 
@@ -132,7 +174,10 @@ def build_environment():
 
 def cpu_info():
 
-    print("\n========== CPU INFO ==========", flush=True)
+    print(
+        "\n========== CPU INFO ==========",
+        flush=True,
+    )
 
     run_command(
         ["nproc"],
@@ -144,7 +189,7 @@ def cpu_info():
             "bash",
             "-c",
             "lscpu | grep -E "
-            "'Architecture|Model name|CPU\\(s\\)|Thread|Core|Socket|Virtualization'"
+            "'Architecture|Model name|CPU\\(s\\)|Thread|Core|Socket|Virtualization'",
         ],
         timeout=30,
     )
@@ -156,15 +201,27 @@ def cpu_info():
 
 def root_test():
 
-    print("\n========== ROOT TEST ==========", flush=True)
+    print(
+        "\n========== ROOT TEST ==========",
+        flush=True,
+    )
 
     code, _ = run_command(
-        ["sudo", "-n", "id"],
-        timeout=30,
+        [
+            "sudo",
+            "-n",
+            "id",
+        ],
+        timeout=20,
     )
 
     if code == 0:
-        print("SUDO WITHOUT PASSWORD: AVAILABLE", flush=True)
+
+        print(
+            "SUDO WITHOUT PASSWORD: AVAILABLE",
+            flush=True,
+        )
+
         return True
 
     print(
@@ -181,7 +238,10 @@ def root_test():
 
 def setup_spotdl():
 
-    print("\n========== SPOTDL SETUP ==========", flush=True)
+    print(
+        "\n========== SPOTDL SETUP ==========",
+        flush=True,
+    )
 
     SPOTDL_VENV.parent.mkdir(
         parents=True,
@@ -210,10 +270,12 @@ def setup_spotdl():
         )
 
         if code != 0:
+
             print(
                 "FAILED TO CREATE SPOTDL VENV",
                 flush=True,
             )
+
             return False
 
     else:
@@ -224,7 +286,7 @@ def setup_spotdl():
         )
 
     # --------------------------------------------------------
-    # Install spotDL if missing
+    # Install spotDL
     # --------------------------------------------------------
 
     if not SPOTDL_CMD.exists():
@@ -263,10 +325,12 @@ def setup_spotdl():
         )
 
         if code != 0:
+
             print(
                 "FAILED TO INSTALL SPOTDL",
                 flush=True,
             )
+
             return False
 
     else:
@@ -277,8 +341,7 @@ def setup_spotdl():
         )
 
     # --------------------------------------------------------
-    # IMPORTANT:
-    # DO NOT PIN OLD YT-DLP
+    # Latest yt-dlp + EJS
     # --------------------------------------------------------
 
     print(
@@ -300,14 +363,16 @@ def setup_spotdl():
     )
 
     if code != 0:
+
         print(
             "FAILED TO UPDATE YT-DLP",
             flush=True,
         )
+
         return False
 
     # --------------------------------------------------------
-    # Verify spotDL
+    # spotDL version
     # --------------------------------------------------------
 
     print(
@@ -324,7 +389,7 @@ def setup_spotdl():
     )
 
     # --------------------------------------------------------
-    # Verify yt-dlp
+    # yt-dlp version
     # --------------------------------------------------------
 
     print(
@@ -343,14 +408,10 @@ def setup_spotdl():
     )
 
     if code != 0:
-        print(
-            "YT-DLP VERIFICATION FAILED",
-            flush=True,
-        )
         return False
 
     # --------------------------------------------------------
-    # Verify yt-dlp-ejs
+    # EJS
     # --------------------------------------------------------
 
     print(
@@ -358,7 +419,7 @@ def setup_spotdl():
         flush=True,
     )
 
-    code, _ = run_command(
+    run_command(
         [
             str(SPOTDL_PYTHON),
             "-m",
@@ -369,12 +430,6 @@ def setup_spotdl():
         timeout=60,
     )
 
-    if code != 0:
-        print(
-            "YT-DLP-EJS CHECK FAILED",
-            flush=True,
-        )
-
     return True
 
 
@@ -384,26 +439,27 @@ def setup_spotdl():
 
 def setup_deno():
 
-    print("\n========== DENO SETUP ==========", flush=True)
+    print(
+        "\n========== DENO SETUP ==========",
+        flush=True,
+    )
 
     LOCAL_BIN.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    # --------------------------------------------------------
-    # Already installed
-    # --------------------------------------------------------
-
     if DENO_BIN.exists():
 
         try:
+
             DENO_BIN.chmod(
                 DENO_BIN.stat().st_mode
                 | stat.S_IXUSR
                 | stat.S_IXGRP
                 | stat.S_IXOTH
             )
+
         except Exception:
             pass
 
@@ -412,20 +468,18 @@ def setup_deno():
                 str(DENO_BIN),
                 "--version",
             ],
-            timeout=60,
+            timeout=30,
             env=build_environment(),
         )
 
         if code == 0:
+
             print(
                 "Deno already available.",
                 flush=True,
             )
-            return True
 
-    # --------------------------------------------------------
-    # Download Deno
-    # --------------------------------------------------------
+            return True
 
     print(
         "Downloading Deno...",
@@ -446,11 +500,6 @@ def setup_deno():
             deno_zip,
         )
 
-        print(
-            "Deno archive downloaded.",
-            flush=True,
-        )
-
     except Exception as e:
 
         print(
@@ -460,10 +509,6 @@ def setup_deno():
         )
 
         return False
-
-    # --------------------------------------------------------
-    # Extract
-    # --------------------------------------------------------
 
     try:
 
@@ -486,10 +531,6 @@ def setup_deno():
 
         return False
 
-    # --------------------------------------------------------
-    # Permissions
-    # --------------------------------------------------------
-
     try:
 
         DENO_BIN.chmod(
@@ -499,17 +540,8 @@ def setup_deno():
             | stat.S_IXOTH
         )
 
-    except Exception as e:
-
-        print(
-            "Deno chmod failed:",
-            repr(e),
-            flush=True,
-        )
-
-    # --------------------------------------------------------
-    # Cleanup
-    # --------------------------------------------------------
+    except Exception:
+        pass
 
     try:
         deno_zip.unlink(
@@ -518,32 +550,16 @@ def setup_deno():
     except Exception:
         pass
 
-    # --------------------------------------------------------
-    # Verify
-    # --------------------------------------------------------
-
     code, _ = run_command(
         [
             str(DENO_BIN),
             "--version",
         ],
-        timeout=60,
+        timeout=30,
         env=build_environment(),
     )
 
-    if code != 0:
-        print(
-            "DENO TEST FAILED",
-            flush=True,
-        )
-        return False
-
-    print(
-        "Deno setup successful.",
-        flush=True,
-    )
-
-    return True
+    return code == 0
 
 
 # ============================================================
@@ -552,7 +568,10 @@ def setup_deno():
 
 def setup_ffmpeg():
 
-    print("\n========== FFMPEG SETUP ==========", flush=True)
+    print(
+        "\n========== FFMPEG SETUP ==========",
+        flush=True,
+    )
 
     FFMPEG_DIR.mkdir(
         parents=True,
@@ -578,7 +597,7 @@ def setup_ffmpeg():
                 str(FFMPEG_BIN),
                 "-version",
             ],
-            timeout=60,
+            timeout=30,
             env=build_environment(),
         )
 
@@ -590,10 +609,6 @@ def setup_ffmpeg():
             )
 
             return True
-
-    # --------------------------------------------------------
-    # Download through spotDL
-    # --------------------------------------------------------
 
     print(
         "FFmpeg not found. Downloading through spotDL...",
@@ -610,23 +625,9 @@ def setup_ffmpeg():
     )
 
     if code != 0:
-        print(
-            "FFmpeg download failed.",
-            flush=True,
-        )
         return False
 
-    # --------------------------------------------------------
-    # Verify
-    # --------------------------------------------------------
-
     if not FFMPEG_BIN.exists():
-
-        print(
-            "FFmpeg binary still not found.",
-            flush=True,
-        )
-
         return False
 
     try:
@@ -646,11 +647,55 @@ def setup_ffmpeg():
             str(FFMPEG_BIN),
             "-version",
         ],
-        timeout=60,
+        timeout=30,
         env=build_environment(),
     )
 
     return code == 0
+
+
+# ============================================================
+# COMMON YT-DLP OPTIONS
+# ============================================================
+
+def youtube_base_command():
+
+    cmd = [
+        str(SPOTDL_PYTHON),
+        "-m",
+        "yt_dlp",
+
+        "--no-playlist",
+
+        # Do not wait forever for YouTube.
+        "--socket-timeout",
+        "20",
+
+        # Keep retries low during diagnostics.
+        "--retries",
+        "1",
+
+        "--fragment-retries",
+        "1",
+
+        "--extractor-retries",
+        "1",
+
+        # Do not sleep between requests.
+        "--retry-sleep",
+        "0",
+    ]
+
+    if DENO_BIN.exists():
+
+        cmd.extend(
+            [
+                "--js-runtimes",
+                f"deno:{DENO_BIN}",
+            ]
+        )
+
+    return cmd
 
 
 # ============================================================
@@ -664,31 +709,23 @@ def test_youtube_metadata():
         flush=True,
     )
 
-    cmd = [
-        str(SPOTDL_PYTHON),
-        "-m",
-        "yt_dlp",
-        "--no-playlist",
-        "--dump-single-json",
-        "--skip-download",
-    ]
+    cmd = youtube_base_command()
 
-    if DENO_BIN.exists():
+    cmd.extend(
+        [
+            "--dump-single-json",
+            "--skip-download",
 
-        cmd.extend(
-            [
-                "--js-runtimes",
-                f"deno:{DENO_BIN}",
-            ]
-        )
+            # Verbose output is important now.
+            "--verbose",
 
-    cmd.append(
-        TEST_URL
+            TEST_URL,
+        ]
     )
 
-    code, output = run_command(
+    code, _ = run_command(
         cmd,
-        timeout=180,
+        timeout=75,
         env=build_environment(),
     )
 
@@ -720,7 +757,9 @@ def test_youtube_audio():
         flush=True,
     )
 
-    test_dir = Path("/tmp/spma_yt_test")
+    test_dir = Path(
+        "/tmp/spma_yt_test"
+    )
 
     try:
 
@@ -742,47 +781,25 @@ def test_youtube_audio():
         + "/%(id)s.%(ext)s"
     )
 
-    cmd = [
-        str(SPOTDL_PYTHON),
-        "-m",
-        "yt_dlp",
+    cmd = youtube_base_command()
 
-        "--no-playlist",
+    cmd.extend(
+        [
+            "-f",
+            "ba/b",
 
-        # Let yt-dlp choose the best available audio.
-        "-f",
-        "ba/b",
+            "-o",
+            output_template,
 
-        "-o",
-        output_template,
-    ]
+            "--verbose",
 
-    # --------------------------------------------------------
-    # Deno / EJS
-    # --------------------------------------------------------
-
-    if DENO_BIN.exists():
-
-        cmd.extend(
-            [
-                "--js-runtimes",
-                f"deno:{DENO_BIN}",
-            ]
-        )
-
-    # --------------------------------------------------------
-    # IMPORTANT:
-    # NO web_embedded
-    # NO forced player_client
-    # --------------------------------------------------------
-
-    cmd.append(
-        TEST_URL
+            TEST_URL,
+        ]
     )
 
     code, _ = run_command(
         cmd,
-        timeout=300,
+        timeout=120,
         env=build_environment(),
     )
 
@@ -823,7 +840,7 @@ def test_youtube_audio():
 
 
 # ============================================================
-# YOUTUBE FULL TEST
+# YOUTUBE TEST
 # ============================================================
 
 def test_youtube():
@@ -837,6 +854,21 @@ def test_youtube():
     )
 
     metadata_ok = test_youtube_metadata()
+
+    if not metadata_ok:
+
+        print(
+            "\nMetadata test failed/hung.",
+            flush=True,
+        )
+
+        print(
+            "Skipping audio test because YouTube metadata "
+            "is not currently reachable.",
+            flush=True,
+        )
+
+        return False, False
 
     audio_ok = test_youtube_audio()
 
@@ -861,7 +893,7 @@ def test_youtube():
 
 
 # ============================================================
-# TELEGRAM BOT LOCK
+# TELEGRAM LOCK
 # ============================================================
 
 def acquire_bot_lock():
@@ -957,10 +989,6 @@ def start_bot():
 
         return False
 
-    # --------------------------------------------------------
-    # Import PTB 13.14
-    # --------------------------------------------------------
-
     try:
 
         from telegram.ext import (
@@ -981,7 +1009,7 @@ def start_bot():
         return False
 
     # --------------------------------------------------------
-    # Handlers
+    # /start
     # --------------------------------------------------------
 
     def start(update, context):
@@ -999,6 +1027,10 @@ def start_bot():
                 repr(e),
                 flush=True,
             )
+
+    # --------------------------------------------------------
+    # Spotify download
+    # --------------------------------------------------------
 
     def download_track(update, context):
 
@@ -1033,12 +1065,8 @@ def start_bot():
         except Exception:
             pass
 
-        # ----------------------------------------------------
-        # Temporary download directory
-        # ----------------------------------------------------
-
-        download_dir = (
-            Path("/tmp/spma_downloads")
+        download_dir = Path(
+            "/tmp/spma_downloads"
         )
 
         download_dir.mkdir(
@@ -1047,7 +1075,7 @@ def start_bot():
         )
 
         # ----------------------------------------------------
-        # SpotDL command
+        # SpotDL
         # ----------------------------------------------------
 
         cmd = [
@@ -1076,7 +1104,7 @@ def start_bot():
         ]
 
         # ----------------------------------------------------
-        # Deno / EJS
+        # Deno
         # ----------------------------------------------------
 
         if DENO_BIN.exists():
@@ -1087,10 +1115,6 @@ def start_bot():
                     f'--js-runtimes "deno:{DENO_BIN}"',
                 ]
             )
-
-        # ----------------------------------------------------
-        # Run spotDL
-        # ----------------------------------------------------
 
         print(
             "\n========== SPOTIFY DOWNLOAD ==========",
@@ -1110,7 +1134,7 @@ def start_bot():
         )
 
         # ----------------------------------------------------
-        # Find generated audio
+        # Search downloaded files
         # ----------------------------------------------------
 
         audio_files = []
@@ -1130,8 +1154,6 @@ def start_bot():
                 )
             )
 
-        # SpotDL may save somewhere else depending
-        # on its config, so also inspect current directory.
         if not audio_files:
 
             for extension in [
@@ -1159,9 +1181,7 @@ def start_bot():
             try:
 
                 message.reply_text(
-                    "❌ Download failed.\n\n"
-                    "YouTube/yt-dlp may have rejected "
-                    "the media request."
+                    "❌ Download failed."
                 )
 
             except Exception:
@@ -1178,7 +1198,7 @@ def start_bot():
         )
 
         # ----------------------------------------------------
-        # Send audio
+        # Send
         # ----------------------------------------------------
 
         try:
@@ -1264,8 +1284,6 @@ def start_bot():
             flush=True,
         )
 
-        # IMPORTANT:
-        # Do NOT use updater.idle() on Streamlit.
         while True:
 
             time.sleep(
@@ -1332,15 +1350,7 @@ def initialize():
         flush=True,
     )
 
-    # --------------------------------------------------------
-    # CPU
-    # --------------------------------------------------------
-
     cpu_info()
-
-    # --------------------------------------------------------
-    # Root
-    # --------------------------------------------------------
 
     root_test()
 
@@ -1386,7 +1396,7 @@ def initialize():
         )
 
     # --------------------------------------------------------
-    # YouTube tests
+    # YouTube
     # --------------------------------------------------------
 
     metadata_ok, audio_ok = test_youtube()
@@ -1457,9 +1467,10 @@ st.write(
     "Spotify downloader service is running."
 )
 
-# ------------------------------------------------------------
-# Initialize once per Streamlit process
-# ------------------------------------------------------------
+
+# ============================================================
+# INITIALIZE
+# ============================================================
 
 if not globals().get(
     "_SPMA_INITIALIZED",
@@ -1487,9 +1498,9 @@ if not globals().get(
         )
 
 
-# ------------------------------------------------------------
-# Keep Streamlit process alive
-# ------------------------------------------------------------
+# ============================================================
+# KEEP PROCESS ALIVE
+# ============================================================
 
 while True:
 
