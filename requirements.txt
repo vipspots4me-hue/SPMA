@@ -5,10 +5,7 @@ pytube
 ytmusicapi
 spotipy
 requests
-
-python-telegram-bot==13.15
+python-telegram-bot==13.14
 APScheduler==3.10.4
-
 yt-dlp==2026.06.09
-
 git+https://github.com/TzurSoffer/spotify-downloader@29cb0b0669d5c107331b0912fdef73967b47493e
