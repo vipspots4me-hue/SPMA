@@ -7,7 +7,7 @@ spotipy
 requests
 
 python-telegram-bot==13.14
-APScheduler==3.10.4
+APScheduler==3.6.0
 setuptools==80.9.0
 
 yt-dlp==2026.06.09
