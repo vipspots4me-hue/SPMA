@@ -4,7 +4,6 @@ pytube
 ytmusicapi
 spotipy
 requests
-spotdl==4.4.3
 yt-dlp==2026.06.09
 python-telegram-bot==13.14
 APScheduler==3.6.3
