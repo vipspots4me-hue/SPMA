@@ -21,19 +21,24 @@ import streamlit as st
 
 BASE_DIR = Path("/mount/src/spma")
 
-
 # ============================================================
 # FIXED VERSIONS
 # ============================================================
 
 SPOTDL_VERSION = "4.4.11"
+
 YTDLP_VERSION = "2026.06.09"
+
 YTDLP_EJS_VERSION = "0.8.0"
+
 BGUTIL_VERSION = "2.0.0"
+
 DENO_VERSION = "2.9.6"
+
 FFMPEG_VERSION = "7.0.2"
 
 
+# Exact spotDL commit that you were using
 SPOTDL_GIT = (
     "git+https://github.com/TzurSoffer/"
     "spotify-downloader"
@@ -85,6 +90,7 @@ YOUTUBE_TEST_DIR = (
     BASE_DIR / ".youtube_test"
 )
 
+
 DENO_BIN = (
     BIN_DIR / "deno"
 )
@@ -130,6 +136,17 @@ BGUTIL_PROCESS = None
 # YOUTUBE / YT-DLP
 # ============================================================
 
+# IMPORTANT:
+#
+# We intentionally DO NOT use android_vr.
+#
+# Previous testing showed android_vr could produce a
+# googlevideo URL which returned HTTP 403 during the
+# real audio download.
+#
+# mweb + fetch_pot=always + bgutil is used instead.
+#
+
 YOUTUBE_CLIENT_ARGS = (
     "youtube:player_client=mweb;fetch_pot=always"
 )
@@ -166,7 +183,6 @@ def get_secret(
 ) -> str:
 
     try:
-
         value = st.secrets.get(
             name,
             default,
@@ -178,7 +194,6 @@ def get_secret(
         return str(value).strip()
 
     except Exception:
-
         return os.environ.get(
             name,
             default,
@@ -406,9 +421,7 @@ def download_file(
                     "Mozilla/5.0 "
                     "(X11; Linux x86_64) "
                     "AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) "
-                    "Chrome/140.0.0.0 "
-                    "Safari/537.36"
+                    "Chrome/140 Safari/537.36"
             },
         )
 
@@ -470,8 +483,8 @@ def download_file(
 
     except Exception as exc:
 
-        logger.warning(
-            "Python download failed: %s",
+        logger.exception(
+            "Download failed: %s",
             exc,
         )
 
@@ -483,84 +496,7 @@ def download_file(
         except Exception:
             pass
 
-    # --------------------------------------------------------
-    # Fallback to curl
-    # --------------------------------------------------------
-
-    logger.info(
-        "Trying curl fallback..."
-    )
-
-    result = run_command(
-        [
-            "curl",
-            "-L",
-            "--fail",
-            "--retry",
-            "3",
-            "--retry-delay",
-            "2",
-            "--connect-timeout",
-            "20",
-            "--max-time",
-            str(timeout),
-            "-A",
-            (
-                "Mozilla/5.0 "
-                "(X11; Linux x86_64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/140.0.0.0 "
-                "Safari/537.36"
-            ),
-            "-o",
-            str(temp_file),
-            url,
-        ],
-        timeout=timeout + 60,
-    )
-
-    if (
-        result
-        and result.returncode == 0
-        and temp_file.exists()
-        and temp_file.stat().st_size > 0
-    ):
-
-        try:
-
-            temp_file.replace(
-                destination
-            )
-
-            logger.info(
-                "Download complete with curl: %s",
-                destination,
-            )
-
-            return True
-
-        except Exception as exc:
-
-            logger.exception(
-                "Could not move downloaded file: %s",
-                exc,
-            )
-
-    try:
-
-        if temp_file.exists():
-            temp_file.unlink()
-
-    except Exception:
-        pass
-
-    logger.error(
-        "Download failed completely: %s",
-        url,
-    )
-
-    return False
+        return False
 
 
 # ============================================================
@@ -601,55 +537,24 @@ def install_deno():
         DENO_VERSION,
     )
 
+    url = (
+        "https://dl.deno.land/release/"
+        f"v{DENO_VERSION}/"
+        "deno-x86_64-unknown-linux-gnu.zip"
+    )
+
     archive = (
         CACHE_DIR
         / f"deno-{DENO_VERSION}.zip"
     )
 
-    # --------------------------------------------------------
-    # First source: GitHub Release
-    # This avoids the 403 encountered from dl.deno.land.
-    # --------------------------------------------------------
+    if not archive.exists():
 
-    urls = [
-        (
-            "https://github.com/denoland/deno/"
-            "releases/download/"
-            f"v{DENO_VERSION}/"
-            "deno-x86_64-unknown-linux-gnu.zip"
-        ),
-        (
-            "https://dl.deno.land/release/"
-            f"v{DENO_VERSION}/"
-            "deno-x86_64-unknown-linux-gnu.zip"
-        ),
-    ]
-
-    downloaded = False
-
-    for url in urls:
-
-        logger.info(
-            "Trying Deno source: %s",
-            url,
-        )
-
-        if download_file(
+        if not download_file(
             url,
             archive,
         ):
-
-            downloaded = True
-            break
-
-    if not downloaded:
-
-        logger.error(
-            "Unable to download Deno %s.",
-            DENO_VERSION,
-        )
-
-        return False
+            return False
 
     extract_dir = (
         CACHE_DIR
@@ -725,10 +630,6 @@ def install_deno():
 
         return True
 
-    logger.error(
-        "Deno verification failed."
-    )
-
     return False
 
 
@@ -771,6 +672,12 @@ def install_ffmpeg():
         FFMPEG_VERSION,
     )
 
+    # Official John Van Sickle static build.
+    #
+    # This exact archive extracts to:
+    #
+    # ffmpeg-7.0.2-amd64-static/
+    #
     url = (
         "https://www.johnvansickle.com/"
         "ffmpeg/releases/"
@@ -889,10 +796,6 @@ def install_ffmpeg():
 
         return True
 
-    logger.error(
-        "FFmpeg verification failed."
-    )
-
     return False
 
 
@@ -901,6 +804,10 @@ def install_ffmpeg():
 # ============================================================
 
 def install_spotdl():
+
+    # --------------------------------------------------------
+    # Create venv
+    # --------------------------------------------------------
 
     if not SPOTDL_PYTHON.exists():
 
@@ -929,6 +836,10 @@ def install_spotdl():
 
             return False
 
+    # --------------------------------------------------------
+    # Upgrade pip
+    # --------------------------------------------------------
+
     result = run_command(
         [
             str(SPOTDL_PYTHON),
@@ -949,6 +860,10 @@ def install_spotdl():
     ):
 
         return False
+
+    # --------------------------------------------------------
+    # spotDL
+    # --------------------------------------------------------
 
     logger.info(
         "Installing spotDL %s...",
@@ -978,6 +893,10 @@ def install_spotdl():
 
         return False
 
+    # --------------------------------------------------------
+    # Exact yt-dlp
+    # --------------------------------------------------------
+
     logger.info(
         "Pinning yt-dlp %s...",
         YTDLP_VERSION,
@@ -1002,6 +921,10 @@ def install_spotdl():
 
         return False
 
+    # --------------------------------------------------------
+    # yt-dlp-ejs
+    # --------------------------------------------------------
+
     logger.info(
         "Installing yt-dlp-ejs %s...",
         YTDLP_EJS_VERSION,
@@ -1025,6 +948,10 @@ def install_spotdl():
     ):
 
         return False
+
+    # --------------------------------------------------------
+    # bgutil yt-dlp plugin
+    # --------------------------------------------------------
 
     logger.info(
         "Installing bgutil plugin %s...",
@@ -1052,10 +979,14 @@ def install_spotdl():
     ):
 
         logger.error(
-            "bgutil plugin installation failed."
+            "bgutil yt-dlp plugin installation failed."
         )
 
         return False
+
+    # --------------------------------------------------------
+    # Verify spotDL
+    # --------------------------------------------------------
 
     result = run_command(
         [
@@ -1103,6 +1034,7 @@ def install_bgutil():
 
         return True
 
+    # If an incomplete clone exists, remove it.
     if BGUTIL_DIR.exists():
 
         logger.warning(
@@ -1111,18 +1043,14 @@ def install_bgutil():
         )
 
         try:
-
             shutil.rmtree(
                 BGUTIL_DIR
             )
-
         except Exception as exc:
-
             logger.exception(
                 "Unable to remove old bgutil: %s",
                 exc,
             )
-
             return False
 
     logger.info(
@@ -1206,6 +1134,15 @@ def install_bgutil_dependencies():
         "Installing bgutil dependencies..."
     )
 
+    # IMPORTANT:
+    #
+    # Must run from:
+    #
+    # bgutil-ytdlp-pot-provider/server/
+    #
+    # not from the repository root.
+    #
+
     result = run_command(
         [
             str(DENO_BIN),
@@ -1257,6 +1194,7 @@ def is_bgutil_server_running():
         ) as response:
 
             if response.status == 200:
+
                 return True
 
     except urllib.error.HTTPError as exc:
@@ -1308,14 +1246,33 @@ def start_bgutil_server():
         "Starting bgutil PO Token server..."
     )
 
+    # ========================================================
+    # THIS IS THE CORRECT COMMAND FOR BGUTIL 2.0.0
+    #
+    # Working directory:
+    #
+    # server/node_modules
+    #
+    # Main file:
+    #
+    # ../src/main.ts
+    # ========================================================
+
     command = [
         str(DENO_BIN),
+
         "run",
+
         "--allow-env",
+
         "--allow-net",
+
         "--allow-ffi=.",
+
         "--allow-read=.",
+
         "../src/main.ts",
+
         "--port",
         str(BGUTIL_PORT),
     ]
@@ -1341,6 +1298,10 @@ def start_bgutil_server():
 
         return False
 
+    # --------------------------------------------------------
+    # bgutil log thread
+    # --------------------------------------------------------
+
     def bgutil_logger():
 
         try:
@@ -1363,6 +1324,10 @@ def start_bgutil_server():
         target=bgutil_logger,
         daemon=True,
     ).start()
+
+    # --------------------------------------------------------
+    # Wait for server
+    # --------------------------------------------------------
 
     for _ in range(60):
 
@@ -1519,7 +1484,8 @@ def acquire_bot_lock():
 
         fcntl.flock(
             BOT_LOCK_FD,
-            fcntl.LOCK_EX | fcntl.LOCK_NB,
+            fcntl.LOCK_EX
+            | fcntl.LOCK_NB,
         )
 
         logger.info(
@@ -1630,7 +1596,6 @@ def find_audio_file(
                 continue
 
         except Exception:
-
             continue
 
         files.append(path)
@@ -1723,8 +1688,6 @@ def download_song(
 
         "--no-cache",
 
-        # IMPORTANT:
-        # spotDL 4.4.11 requires a value.
         "--overwrite",
         "force",
 
@@ -1762,6 +1725,10 @@ def download_song(
             "spotDL exited with code %s",
             result.returncode,
         )
+
+    # --------------------------------------------------------
+    # Search output
+    # --------------------------------------------------------
 
     audio_file = find_audio_file(
         output_dir
@@ -1811,6 +1778,10 @@ def telegram_message(
     if not text:
         return
 
+    # --------------------------------------------------------
+    # Spotify validation
+    # --------------------------------------------------------
+
     if (
         "open.spotify.com/track/"
         not in text
@@ -1842,6 +1813,10 @@ def telegram_message(
         message_id,
     )
 
+    # --------------------------------------------------------
+    # Status
+    # --------------------------------------------------------
+
     status_message = None
 
     try:
@@ -1854,6 +1829,10 @@ def telegram_message(
 
     except Exception:
         pass
+
+    # --------------------------------------------------------
+    # Per-request directory
+    # --------------------------------------------------------
 
     output_dir = (
         DOWNLOAD_DIR
@@ -1882,6 +1861,10 @@ def telegram_message(
                     pass
 
             return
+
+        # ----------------------------------------------------
+        # Sending
+        # ----------------------------------------------------
 
         if status_message:
 
@@ -1922,6 +1905,10 @@ def telegram_message(
                 status_message.delete()
             except Exception:
                 pass
+
+        # ----------------------------------------------------
+        # Cleanup
+        # ----------------------------------------------------
 
         try:
 
@@ -1969,6 +1956,7 @@ def start_telegram_bot():
         return None
 
     if not acquire_bot_lock():
+
         return None
 
     try:
@@ -2000,6 +1988,7 @@ def start_telegram_bot():
             updater.dispatcher
         )
 
+        # /start
         dispatcher.add_handler(
             CommandHandler(
                 "start",
@@ -2007,6 +1996,7 @@ def start_telegram_bot():
             )
         )
 
+        # /help
         dispatcher.add_handler(
             CommandHandler(
                 "help",
@@ -2014,6 +2004,7 @@ def start_telegram_bot():
             )
         )
 
+        # Normal messages
         dispatcher.add_handler(
             MessageHandler(
                 Filters.text
@@ -2021,6 +2012,12 @@ def start_telegram_bot():
                 telegram_message,
             )
         )
+
+        # IMPORTANT:
+        #
+        # Do NOT use updater.idle()
+        # because Streamlit owns the process.
+        #
 
         updater.start_polling(
             drop_pending_updates=True,
@@ -2072,9 +2069,7 @@ def initialize():
     # 2. Deno
     # --------------------------------------------------------
 
-    deno_ok = install_deno()
-
-    if not deno_ok:
+    if not install_deno():
 
         logger.error(
             "Deno installation FAILED."
@@ -2084,9 +2079,7 @@ def initialize():
     # 3. FFmpeg
     # --------------------------------------------------------
 
-    ffmpeg_ok = install_ffmpeg()
-
-    if not ffmpeg_ok:
+    if not install_ffmpeg():
 
         logger.error(
             "FFmpeg installation FAILED."
@@ -2096,9 +2089,7 @@ def initialize():
     # 4. spotDL
     # --------------------------------------------------------
 
-    spotdl_ok = install_spotdl()
-
-    if not spotdl_ok:
+    if not install_spotdl():
 
         logger.error(
             "spotDL installation FAILED."
@@ -2124,7 +2115,7 @@ def initialize():
 
     bgutil_dependencies_ok = False
 
-    if bgutil_source_ok and deno_ok:
+    if bgutil_source_ok:
 
         bgutil_dependencies_ok = (
             install_bgutil_dependencies()
@@ -2207,7 +2198,7 @@ def initialize():
     if (
         bgutil_source_ok
         and bgutil_dependencies_ok
-        and deno_ok
+        and DENO_BIN.exists()
     ):
 
         bgutil_ok = (
@@ -2233,7 +2224,7 @@ def initialize():
     if (
         ytdlp_ok
         and bgutil_ok
-        and deno_ok
+        and DENO_BIN.exists()
     ):
 
         check_bgutil_plugin()
@@ -2246,4 +2237,50 @@ def initialize():
 
     # --------------------------------------------------------
     # Finished
-    # ----------------------------
+    # --------------------------------------------------------
+
+    logger.info(
+        "========================================"
+    )
+
+    logger.info(
+        "SPMA initialization finished"
+    )
+
+    logger.info(
+        "========================================"
+    )
+
+
+# ============================================================
+# STREAMLIT INITIALIZATION GUARD
+# ============================================================
+
+if not globals().get(
+    "_SPMA_INITIALIZED",
+    False,
+):
+
+    globals()[
+        "_SPMA_INITIALIZED"
+    ] = True
+
+    try:
+
+        initialize()
+
+    except Exception as exc:
+
+        logger.exception(
+            "Fatal initialization error: %s",
+            exc,
+        )
+
+
+# ============================================================
+# KEEP STREAMLIT PROCESS ALIVE
+# ============================================================
+
+while True:
+
+    time.sleep(3600)
