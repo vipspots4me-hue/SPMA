@@ -28,7 +28,9 @@ BASE_DIR = Path("/mount/src/spma")
 
 SPOTDL_VERSION = "4.4.11"
 
-# UPDATED
+# IMPORTANT:
+# 2026.08.19 is currently installed and is newer than the
+# previously pinned 2026.06.09.
 YTDLP_VERSION = "2026.08.19"
 
 YTDLP_EJS_VERSION = "0.8.0"
@@ -40,7 +42,7 @@ DENO_VERSION = "2.9.6"
 FFMPEG_VERSION = "7.0.2"
 
 
-# Exact spotDL commit that you were using
+# Exact spotDL commit
 SPOTDL_GIT = (
     "git+https://github.com/TzurSoffer/"
     "spotify-downloader"
@@ -92,7 +94,6 @@ YOUTUBE_TEST_DIR = (
     BASE_DIR / ".youtube_test"
 )
 
-
 DENO_BIN = (
     BIN_DIR / "deno"
 )
@@ -138,19 +139,23 @@ BGUTIL_PROCESS = None
 # YOUTUBE / YT-DLP
 # ============================================================
 
-# IMPORTANT:
+# Primary method.
 #
-# We intentionally DO NOT use android_vr.
+# Current yt-dlp documentation recommends mweb + PO Token
+# provider for GVS requests.
 #
-# Previous testing showed android_vr could produce a
-# googlevideo URL which returned HTTP 403 during the
-# real audio download.
+# However, YouTube can still return HTTP 403 on the generated
+# googlevideo URL depending on the current IP/session.
 #
-# mweb + fetch_pot=always + bgutil is used instead.
-#
+# Therefore we also have a fallback client: tv.
+# ============================================================
 
-YOUTUBE_CLIENT_ARGS = (
+YOUTUBE_MWEB_ARGS = (
     "youtube:player_client=mweb;fetch_pot=always"
+)
+
+YOUTUBE_TV_ARGS = (
+    "youtube:player_client=tv"
 )
 
 YOUTUBE_POT_ARGS = (
@@ -356,9 +361,9 @@ def run_command(
 
             output = result.stdout
 
-            if len(output) > 20000:
+            if len(output) > 30000:
 
-                output = output[-20000:]
+                output = output[-30000:]
 
             logger.info(
                 "\n%s",
@@ -676,13 +681,6 @@ def install_ffmpeg():
         FFMPEG_VERSION,
     )
 
-    # Official John Van Sickle static build.
-    #
-    # This exact archive extracts to:
-    #
-    # ffmpeg-7.0.2-amd64-static/
-    #
-
     url = (
         "https://www.johnvansickle.com/"
         "ffmpeg/releases/"
@@ -899,11 +897,11 @@ def install_spotdl():
         return False
 
     # --------------------------------------------------------
-    # Exact yt-dlp
+    # yt-dlp
     # --------------------------------------------------------
 
     logger.info(
-        "Pinning yt-dlp %s...",
+        "Installing yt-dlp %s...",
         YTDLP_VERSION,
     )
 
@@ -1039,8 +1037,6 @@ def install_bgutil():
 
         return True
 
-    # If an incomplete clone exists, remove it.
-
     if BGUTIL_DIR.exists():
 
         logger.warning(
@@ -1144,15 +1140,6 @@ def install_bgutil_dependencies():
         "Installing bgutil dependencies..."
     )
 
-    # IMPORTANT:
-    #
-    # Must run from:
-    #
-    # bgutil-ytdlp-pot-provider/server/
-    #
-    # not from the repository root.
-    #
-
     result = run_command(
         [
             str(DENO_BIN),
@@ -1204,7 +1191,6 @@ def is_bgutil_server_running():
         ) as response:
 
             if response.status == 200:
-
                 return True
 
     except urllib.error.HTTPError as exc:
@@ -1256,19 +1242,8 @@ def start_bgutil_server():
         "Starting bgutil PO Token server..."
     )
 
-    # ========================================================
-    # THIS IS THE CORRECT COMMAND FOR BGUTIL 2.0.0
-    #
-    # Working directory:
-    #
-    # server/node_modules
-    #
-    # Main file:
-    #
-    # ../src/main.ts
-    # ========================================================
-
     command = [
+
         str(DENO_BIN),
 
         "run",
@@ -1308,10 +1283,6 @@ def start_bgutil_server():
 
         return False
 
-    # --------------------------------------------------------
-    # bgutil log thread
-    # --------------------------------------------------------
-
     def bgutil_logger():
 
         try:
@@ -1334,10 +1305,6 @@ def start_bgutil_server():
         target=bgutil_logger,
         daemon=True,
     ).start()
-
-    # --------------------------------------------------------
-    # Wait for server
-    # --------------------------------------------------------
 
     for _ in range(60):
 
@@ -1391,10 +1358,29 @@ def check_ytdlp():
         and result.returncode == 0
     ):
 
+        installed_version = (
+            result.stdout or ""
+        ).strip().splitlines()[-1].strip()
+
         logger.info(
-            "yt-dlp %s: OK",
-            YTDLP_VERSION,
+            "yt-dlp installed version: %s",
+            installed_version,
         )
+
+        if installed_version != YTDLP_VERSION:
+
+            logger.warning(
+                "Expected yt-dlp %s but found %s",
+                YTDLP_VERSION,
+                installed_version,
+            )
+
+        else:
+
+            logger.info(
+                "yt-dlp %s: OK",
+                YTDLP_VERSION,
+            )
 
         return True
 
@@ -1406,163 +1392,45 @@ def check_ytdlp():
 
 
 # ============================================================
-# VERIFY YT-DLP VERSION EXACTLY
+# REAL YOUTUBE AUDIO TEST
 # ============================================================
 
-def check_ytdlp_exact_version():
-
-    result = run_command(
-        [
-            str(SPOTDL_PYTHON),
-            "-m",
-            "yt_dlp",
-            "--version",
-        ],
-        timeout=30,
-    )
-
-    if (
-        result is None
-        or result.returncode != 0
-    ):
-
-        logger.error(
-            "Unable to read yt-dlp version."
-        )
-
-        return False
-
-    actual_version = (
-        result.stdout or ""
-    ).strip().splitlines()
-
-    if not actual_version:
-
-        logger.error(
-            "yt-dlp returned empty version."
-        )
-
-        return False
-
-    actual_version = (
-        actual_version[-1].strip()
-    )
-
-    logger.info(
-        "yt-dlp installed version: %s",
-        actual_version,
-    )
-
-    if actual_version != YTDLP_VERSION:
-
-        logger.error(
-            "yt-dlp version mismatch: "
-            "expected %s but got %s",
-            YTDLP_VERSION,
-            actual_version,
-        )
-
-        return False
-
-    logger.info(
-        "yt-dlp exact version: OK"
-    )
-
-    return True
-
-
-# ============================================================
-# VERIFY BGUTIL PLUGIN / METADATA
-# ============================================================
-
-def check_bgutil_plugin():
-
-    test_url = (
-        "https://www.youtube.com/watch"
-        "?v=0loPj-nIG7c"
-    )
-
-    logger.info(
-        "Checking yt-dlp bgutil plugin..."
-    )
-
-    command = [
-        str(SPOTDL_PYTHON),
-        "-m",
-        "yt_dlp",
-
-        "--no-update",
-
-        "--no-playlist",
-
-        "--socket-timeout",
-        "20",
-
-        "--extractor-retries",
-        "2",
-
-        "--extractor-args",
-        YOUTUBE_CLIENT_ARGS,
-
-        "--extractor-args",
-        YOUTUBE_POT_ARGS,
-
-        "--js-runtimes",
-        f"deno:{DENO_BIN}",
-
-        "--print",
-        "title",
-
-        "--skip-download",
-
-        "--verbose",
-
-        test_url,
-    ]
-
-    result = run_command(
-        command,
-        timeout=180,
-    )
-
-    if (
-        result
-        and result.returncode == 0
-    ):
-
-        logger.info(
-            "YouTube mweb + bgutil test: SUCCESS"
-        )
-
-        return True
-
-    logger.warning(
-        "YouTube mweb + bgutil test: FAILED"
-    )
-
-    return False
-
-
-# ============================================================
-# VERIFY REAL YOUTUBE AUDIO DOWNLOAD
-# ============================================================
-
-def check_ytdlp_real_download():
-
-    # This is one of the YouTube candidates that appeared
-    # during the Spotify download tests.
+def test_real_youtube_download(
+    client_name: str,
+    extractor_args: str,
+):
 
     test_url = (
         "https://www.youtube.com/watch"
         "?v=o0vzwxgP8SQ"
     )
 
+    test_file = (
+        YOUTUBE_TEST_DIR
+        / f"test_{client_name}.%(ext)s"
+    )
+
+    # Remove previous test files
+    for path in YOUTUBE_TEST_DIR.glob(
+        f"test_{client_name}.*"
+    ):
+
+        try:
+            path.unlink()
+        except Exception:
+            pass
+
     logger.info(
         "========================================"
     )
 
     logger.info(
-        "Testing REAL YouTube audio download..."
+        "Testing REAL YouTube audio download"
+    )
+
+    logger.info(
+        "Client: %s",
+        client_name,
     )
 
     logger.info(
@@ -1578,56 +1446,8 @@ def check_ytdlp_real_download():
         "========================================"
     )
 
-    # --------------------------------------------------------
-    # Clean previous test files
-    # --------------------------------------------------------
-
-    try:
-
-        YOUTUBE_TEST_DIR.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        for item in YOUTUBE_TEST_DIR.iterdir():
-
-            try:
-
-                if item.is_file():
-                    item.unlink()
-
-                elif item.is_dir():
-                    shutil.rmtree(item)
-
-            except Exception as exc:
-
-                logger.warning(
-                    "Unable to remove test item %s: %s",
-                    item,
-                    exc,
-                )
-
-    except Exception as exc:
-
-        logger.warning(
-            "Unable to clean YouTube test directory: %s",
-            exc,
-        )
-
-    # --------------------------------------------------------
-    # Output template
-    # --------------------------------------------------------
-
-    test_output = (
-        YOUTUBE_TEST_DIR
-        / "test.%(ext)s"
-    )
-
-    # --------------------------------------------------------
-    # yt-dlp real download command
-    # --------------------------------------------------------
-
     command = [
+
         str(SPOTDL_PYTHON),
 
         "-m",
@@ -1656,7 +1476,7 @@ def check_ytdlp_real_download():
         f"deno:{DENO_BIN}",
 
         "--extractor-args",
-        YOUTUBE_CLIENT_ARGS,
+        extractor_args,
 
         "--extractor-args",
         YOUTUBE_POT_ARGS,
@@ -1665,7 +1485,7 @@ def check_ytdlp_real_download():
         "251",
 
         "-o",
-        str(test_output),
+        str(test_file),
 
         "--verbose",
 
@@ -1674,109 +1494,194 @@ def check_ytdlp_real_download():
 
     result = run_command(
         command,
-        timeout=300,
+        timeout=180,
     )
-
-    # --------------------------------------------------------
-    # Check process result
-    # --------------------------------------------------------
 
     if (
-        result is None
-        or result.returncode != 0
+        result is not None
+        and result.returncode == 0
     ):
 
-        logger.error(
-            "REAL YouTube audio download: FAILED"
+        downloaded = list(
+            YOUTUBE_TEST_DIR.glob(
+                f"test_{client_name}.*"
+            )
         )
 
-        if result is not None:
+        valid_files = [
+            p
+            for p in downloaded
+            if p.is_file()
+            and p.stat().st_size > 0
+        ]
 
-            logger.error(
-                "yt-dlp exit code: %s",
-                result.returncode,
+        if valid_files:
+
+            logger.info(
+                "REAL YouTube audio download: SUCCESS"
             )
 
-        return False
+            logger.info(
+                "Downloaded file: %s",
+                valid_files[0],
+            )
 
-    # --------------------------------------------------------
-    # Find downloaded file
-    # --------------------------------------------------------
+            logger.info(
+                "Downloaded size: %d bytes",
+                valid_files[0].stat().st_size,
+            )
 
-    downloaded = []
+            return True
 
-    try:
+    logger.error(
+        "REAL YouTube audio download: FAILED"
+    )
 
-        for item in YOUTUBE_TEST_DIR.iterdir():
-
-            if not item.is_file():
-                continue
-
-            try:
-
-                if item.stat().st_size <= 0:
-                    continue
-
-            except Exception:
-
-                continue
-
-            downloaded.append(item)
-
-    except Exception as exc:
-
-        logger.exception(
-            "Unable to inspect YouTube test directory: %s",
-            exc,
-        )
-
-    if not downloaded:
+    if result is not None:
 
         logger.error(
-            "REAL YouTube audio download: "
-            "FAILED - no audio file found."
+            "yt-dlp exit code: %s",
+            result.returncode,
         )
 
-        return False
+    return False
 
-    downloaded.sort(
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
+
+# ============================================================
+# VERIFY YOUTUBE CLIENTS
+# ============================================================
+
+def check_youtube_clients():
+
+    results = {}
+
+    # --------------------------------------------------------
+    # 1. mweb + bgutil
+    # --------------------------------------------------------
+
+    logger.info(
+        "Testing YouTube mweb + bgutil..."
     )
 
-    audio_file = downloaded[0]
+    results["mweb"] = test_real_youtube_download(
+        "mweb",
+        YOUTUBE_MWEB_ARGS,
+    )
 
-    try:
+    # --------------------------------------------------------
+    # 2. tv
+    # --------------------------------------------------------
 
-        file_size = audio_file.stat().st_size
+    logger.info(
+        "Testing YouTube tv fallback..."
+    )
 
-    except Exception:
+    results["tv"] = test_real_youtube_download(
+        "tv",
+        YOUTUBE_TV_ARGS,
+    )
 
-        file_size = 0
+    # --------------------------------------------------------
+    # Summary
+    # --------------------------------------------------------
 
     logger.info(
         "========================================"
     )
 
     logger.info(
-        "REAL YouTube audio download: SUCCESS"
+        "YouTube client test results:"
     )
 
     logger.info(
-        "Test audio file: %s",
-        audio_file,
+        "mweb: %s",
+        "SUCCESS" if results["mweb"] else "FAILED",
     )
 
     logger.info(
-        "Test audio size: %d bytes",
-        file_size,
+        "tv:   %s",
+        "SUCCESS" if results["tv"] else "FAILED",
     )
 
     logger.info(
         "========================================"
     )
 
-    return True
+    return results
+
+
+# ============================================================
+# SIMPLE YOUTUBE METADATA TEST
+# ============================================================
+
+def check_bgutil_plugin():
+
+    test_url = (
+        "https://www.youtube.com/watch"
+        "?v=0loPj-nIG7c"
+    )
+
+    logger.info(
+        "Checking yt-dlp bgutil plugin..."
+    )
+
+    command = [
+
+        str(SPOTDL_PYTHON),
+
+        "-m",
+        "yt_dlp",
+
+        "--no-update",
+
+        "--no-playlist",
+
+        "--socket-timeout",
+        "20",
+
+        "--extractor-retries",
+        "2",
+
+        "--extractor-args",
+        YOUTUBE_MWEB_ARGS,
+
+        "--extractor-args",
+        YOUTUBE_POT_ARGS,
+
+        "--js-runtimes",
+        f"deno:{DENO_BIN}",
+
+        "--print",
+        "title",
+
+        "--skip-download",
+
+        "--verbose",
+
+        test_url,
+    ]
+
+    result = run_command(
+        command,
+        timeout=180,
+    )
+
+    if (
+        result
+        and result.returncode == 0
+    ):
+
+        logger.info(
+            "YouTube mweb + bgutil metadata test: SUCCESS"
+        )
+
+        return True
+
+    logger.warning(
+        "YouTube mweb + bgutil metadata test: FAILED"
+    )
+
+    return False
 
 
 # ============================================================
@@ -1908,7 +1813,6 @@ def find_audio_file(
                 continue
 
         except Exception:
-
             continue
 
         files.append(path)
@@ -1925,7 +1829,53 @@ def find_audio_file(
 
 
 # ============================================================
-# DOWNLOAD SONG
+# BUILD YT-DLP ARGS
+# ============================================================
+
+def build_yt_dlp_args(
+    client_name: str,
+):
+
+    if client_name == "tv":
+
+        extractor_args = (
+            YOUTUBE_TV_ARGS
+        )
+
+        # tv does not need the bgutil
+        # PO token argument.
+        return (
+            "--no-update "
+            "--socket-timeout 20 "
+            "--retries 2 "
+            "--fragment-retries 2 "
+            "--extractor-retries 2 "
+            "--retry-sleep 1 "
+            f'--js-runtimes "deno:{DENO_BIN}" '
+            f'--extractor-args "{extractor_args}"'
+        )
+
+    # Default: mweb + bgutil
+
+    extractor_args = (
+        YOUTUBE_MWEB_ARGS
+    )
+
+    return (
+        "--no-update "
+        "--socket-timeout 20 "
+        "--retries 2 "
+        "--fragment-retries 2 "
+        "--extractor-retries 2 "
+        "--retry-sleep 1 "
+        f'--js-runtimes "deno:{DENO_BIN}" '
+        f'--extractor-args "{extractor_args}" '
+        f'--extractor-args "{YOUTUBE_POT_ARGS}"'
+    )
+
+
+# ============================================================
+# DOWNLOAD SONG WITH FALLBACK
 # ============================================================
 
 def download_song(
@@ -1955,117 +1905,162 @@ def download_song(
         except Exception:
             pass
 
-    # --------------------------------------------------------
-    # yt-dlp arguments
-    # --------------------------------------------------------
-
-    yt_dlp_args = (
-        "--no-update "
-        "--socket-timeout 20 "
-        "--retries 2 "
-        "--fragment-retries 2 "
-        "--extractor-retries 2 "
-        "--retry-sleep 1 "
-        f'--js-runtimes "deno:{DENO_BIN}" '
-        f'--extractor-args "{YOUTUBE_CLIENT_ARGS}" '
-        f'--extractor-args "{YOUTUBE_POT_ARGS}"'
-    )
-
-    # --------------------------------------------------------
-    # Output template
-    # --------------------------------------------------------
-
     output_template = (
         str(output_dir)
         + "/{artist} - {title}.{output-ext}"
     )
 
     # --------------------------------------------------------
-    # spotDL command
+    # Client order
+    #
+    # mweb first because this is the preferred/current
+    # PO-token setup.
+    #
+    # tv is the fallback when GoogleVideo returns 403.
     # --------------------------------------------------------
 
-    command = [
-        str(SPOTDL_BIN),
-
-        "--output",
-        output_template,
-
-        "--format",
-        "mp3",
-
-        "--bitrate",
-        "320k",
-
-        "--threads",
-        "4",
-
-        "--no-cache",
-
-        "--overwrite",
-        "force",
-
-        "--yt-dlp-args",
-        yt_dlp_args,
-
-        spotify_url,
+    clients = [
+        "mweb",
+        "tv",
     ]
 
-    logger.info(
-        "Starting spotDL download..."
-    )
+    for client_name in clients:
 
-    logger.info(
-        "Spotify URL: %s",
-        spotify_url,
-    )
-
-    result = run_command(
-        command,
-        timeout=600,
-    )
-
-    if result is None:
-
-        logger.error(
-            "spotDL process returned no result."
+        logger.info(
+            "========================================"
         )
 
-        return None
-
-    if result.returncode != 0:
-
-        logger.error(
-            "spotDL exited with code %s",
-            result.returncode,
+        logger.info(
+            "Starting spotDL download"
         )
 
-    # --------------------------------------------------------
-    # Search output
-    # --------------------------------------------------------
+        logger.info(
+            "YouTube client: %s",
+            client_name,
+        )
 
-    audio_file = find_audio_file(
-        output_dir
-    )
+        logger.info(
+            "Spotify URL: %s",
+            spotify_url,
+        )
 
-    if audio_file is None:
+        logger.info(
+            "========================================"
+        )
+
+        yt_dlp_args = (
+            build_yt_dlp_args(
+                client_name
+            )
+        )
+
+        command = [
+
+            str(SPOTDL_BIN),
+
+            "--output",
+            output_template,
+
+            "--format",
+            "mp3",
+
+            "--bitrate",
+            "320k",
+
+            "--threads",
+            "4",
+
+            "--no-cache",
+
+            "--overwrite",
+            "force",
+
+            "--yt-dlp-args",
+            yt_dlp_args,
+
+            spotify_url,
+        ]
+
+        result = run_command(
+            command,
+            timeout=600,
+        )
+
+        if result is None:
+
+            logger.error(
+                "spotDL process returned no result."
+            )
+
+        elif result.returncode != 0:
+
+            logger.error(
+                "spotDL with %s exited with code %s",
+                client_name,
+                result.returncode,
+            )
+
+        # ----------------------------------------------------
+        # Search output
+        # ----------------------------------------------------
+
+        audio_file = find_audio_file(
+            output_dir
+        )
+
+        if audio_file is not None:
+
+            logger.info(
+                "Audio file found using client: %s",
+                client_name,
+            )
+
+            logger.info(
+                "Audio file: %s",
+                audio_file,
+            )
+
+            logger.info(
+                "Audio size: %d bytes",
+                audio_file.stat().st_size,
+            )
+
+            return audio_file
 
         logger.warning(
-            "No audio file found after download."
+            "No audio file using %s.",
+            client_name,
         )
 
-        return None
+        # ----------------------------------------------------
+        # Clean partial output before fallback
+        # ----------------------------------------------------
 
-    logger.info(
-        "Audio file found: %s",
-        audio_file,
+        for item in output_dir.iterdir():
+
+            try:
+
+                if item.is_file():
+                    item.unlink()
+
+                elif item.is_dir():
+                    shutil.rmtree(item)
+
+            except Exception:
+                pass
+
+        if client_name == "mweb":
+
+            logger.warning(
+                "mweb failed. "
+                "Trying tv fallback..."
+            )
+
+    logger.error(
+        "All YouTube clients failed."
     )
 
-    logger.info(
-        "Audio size: %d bytes",
-        audio_file.stat().st_size,
-    )
-
-    return audio_file
+    return None
 
 
 # ============================================================
@@ -2126,10 +2121,6 @@ def telegram_message(
         message_id,
     )
 
-    # --------------------------------------------------------
-    # Status
-    # --------------------------------------------------------
-
     status_message = None
 
     try:
@@ -2142,10 +2133,6 @@ def telegram_message(
 
     except Exception:
         pass
-
-    # --------------------------------------------------------
-    # Per-request directory
-    # --------------------------------------------------------
 
     output_dir = (
         DOWNLOAD_DIR
@@ -2174,10 +2161,6 @@ def telegram_message(
                     pass
 
             return
-
-        # ----------------------------------------------------
-        # Sending
-        # ----------------------------------------------------
 
         if status_message:
 
@@ -2218,10 +2201,6 @@ def telegram_message(
                 status_message.delete()
             except Exception:
                 pass
-
-        # ----------------------------------------------------
-        # Cleanup
-        # ----------------------------------------------------
 
         try:
 
@@ -2301,7 +2280,6 @@ def start_telegram_bot():
             updater.dispatcher
         )
 
-        # /start
         dispatcher.add_handler(
             CommandHandler(
                 "start",
@@ -2309,7 +2287,6 @@ def start_telegram_bot():
             )
         )
 
-        # /help
         dispatcher.add_handler(
             CommandHandler(
                 "help",
@@ -2317,7 +2294,6 @@ def start_telegram_bot():
             )
         )
 
-        # Normal messages
         dispatcher.add_handler(
             MessageHandler(
                 Filters.text
@@ -2325,12 +2301,6 @@ def start_telegram_bot():
                 telegram_message,
             )
         )
-
-        # IMPORTANT:
-        #
-        # Do NOT use updater.idle()
-        # because Streamlit owns the process.
-        #
 
         updater.start_polling(
             drop_pending_updates=True,
@@ -2399,7 +2369,7 @@ def initialize():
         )
 
     # --------------------------------------------------------
-    # 4. spotDL
+    # 4. spotDL + yt-dlp
     # --------------------------------------------------------
 
     if not install_spotdl():
@@ -2502,12 +2472,6 @@ def initialize():
 
         ytdlp_ok = check_ytdlp()
 
-        if ytdlp_ok:
-
-            ytdlp_ok = (
-                check_ytdlp_exact_version()
-            )
-
     # --------------------------------------------------------
     # 10. bgutil server
     # --------------------------------------------------------
@@ -2537,7 +2501,7 @@ def initialize():
         )
 
     # --------------------------------------------------------
-    # 11. YouTube verification
+    # 11. YouTube metadata test
     # --------------------------------------------------------
 
     if (
@@ -2546,24 +2510,35 @@ def initialize():
         and DENO_BIN.exists()
     ):
 
-        # ----------------------------------------------------
-        # Metadata-only test
-        # ----------------------------------------------------
-
-        metadata_ok = (
-            check_bgutil_plugin()
-        )
-
-        # ----------------------------------------------------
-        # REAL audio download test
-        # ----------------------------------------------------
-
-        if metadata_ok:
-
-            check_ytdlp_real_download()
+        check_bgutil_plugin()
 
     # --------------------------------------------------------
-    # 12. Telegram
+    # 12. REAL YouTube download tests
+    # --------------------------------------------------------
+    #
+    # IMPORTANT:
+    #
+    # This tests actual googlevideo media download,
+    # not just metadata extraction.
+    #
+    # mweb may fail with HTTP 403.
+    # tv is tested as fallback.
+    # --------------------------------------------------------
+
+    youtube_results = {}
+
+    if (
+        ytdlp_ok
+        and bgutil_ok
+        and DENO_BIN.exists()
+    ):
+
+        youtube_results = (
+            check_youtube_clients()
+        )
+
+    # --------------------------------------------------------
+    # 13. Telegram
     # --------------------------------------------------------
 
     start_telegram_bot()
@@ -2579,6 +2554,30 @@ def initialize():
     logger.info(
         "SPMA initialization finished"
     )
+
+    if youtube_results:
+
+        logger.info(
+            "Final YouTube status:"
+        )
+
+        logger.info(
+            "mweb = %s",
+            (
+                "OK"
+                if youtube_results.get("mweb")
+                else "FAILED"
+            ),
+        )
+
+        logger.info(
+            "tv = %s",
+            (
+                "OK"
+                if youtube_results.get("tv")
+                else "FAILED"
+            ),
+        )
 
     logger.info(
         "========================================"
