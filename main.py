@@ -4,243 +4,345 @@ import time
 import subprocess
 import threading
 import shutil
-import platform
-import fcntl
 
 import streamlit as st
 
 
-# =========================================================
+# ============================================================
 # CONFIG
-# =========================================================
+# ============================================================
 
-BASE_DIR = "/mount/src/spma"
-SPOTDL_VENV = os.path.join(BASE_DIR, ".spotdl_venv")
-SPOTDL_PYTHON = os.path.join(SPOTDL_VENV, "bin", "python")
-SPOTDL_BIN = os.path.join(SPOTDL_VENV, "bin", "spotdl")
+SPOTDL_VENV = os.path.join(
+    os.getcwd(),
+    ".spotdl_venv"
+)
 
-FFMPEG_PATH = os.path.expanduser("~/.config/spotdl/ffmpeg")
+SPOTDL_PYTHON = os.path.join(
+    SPOTDL_VENV,
+    "bin",
+    "python"
+)
 
-LOCK_FILE = "/tmp/spma_bot.lock"
+SPOTDL_CMD = os.path.join(
+    SPOTDL_VENV,
+    "bin",
+    "spotdl"
+)
+
+YT_DLP_VERSION = "2026.06.09"
+
+SPOTDL_GIT = (
+    "git+https://github.com/TzurSoffer/"
+    "spotify-downloader@"
+    "29cb0b0669d5c107331b0912fdef73967b47493e"
+)
+
+FFMPEG_PATH = os.path.expanduser(
+    "~/.config/spotdl/ffmpeg"
+)
 
 
-# =========================================================
+# ============================================================
 # HELPERS
-# =========================================================
+# ============================================================
 
-def run_cmd(cmd, timeout=300, env=None):
-    print("\n$ " + " ".join(map(str, cmd)))
+def run_command(cmd, input_text=None, cwd=None, env=None, timeout=600):
+
+    print()
+    print("Running:")
+    print(" ".join(str(x) for x in cmd))
+    print()
 
     try:
+
         result = subprocess.run(
             cmd,
+            input=input_text,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
+            capture_output=True,
+            cwd=cwd,
             env=env,
+            timeout=timeout
         )
 
-        print(result.stdout)
-        print(f"Exit code: {result.returncode}")
+        if result.stdout:
+            print(result.stdout)
 
-        return result.returncode, result.stdout
+        if result.stderr:
+            print(result.stderr)
+
+        print("Exit code:", result.returncode)
+
+        return result
 
     except subprocess.TimeoutExpired:
+
         print("COMMAND TIMEOUT")
-        return -1, ""
+        return None
 
     except Exception as e:
-        print("COMMAND ERROR:", e)
-        return -1, ""
+
+        print("COMMAND ERROR:", repr(e))
+        return None
 
 
-# =========================================================
+# ============================================================
 # CPU INFO
-# =========================================================
+# ============================================================
 
 def cpu_info():
-    print("\n" + "=" * 60)
-    print("CPU INFO")
-    print("=" * 60)
 
-    print("Python:", sys.version)
-    print("Platform:", platform.platform())
-    print("CPU count:", os.cpu_count())
+    print()
+    print("========== CPU INFO ==========")
 
-    run_cmd(["nproc"], timeout=20)
-    run_cmd(["lscpu"], timeout=20)
+    run_command(
+        ["nproc"],
+        timeout=30
+    )
+
+    run_command(
+        ["lscpu"],
+        timeout=30
+    )
+
+    print("======== END CPU INFO ========")
 
 
-# =========================================================
+# ============================================================
 # ROOT TEST
-# =========================================================
+# ============================================================
 
 def root_test():
-    print("\n" + "=" * 60)
-    print("ROOT TEST")
-    print("=" * 60)
 
-    print("Python UID:", os.getuid())
-    print("USER:", os.getenv("USER"))
-    print("HOME:", os.getenv("HOME"))
+    print()
+    print("========== ROOT TEST ==========")
 
-    run_cmd(["id"], timeout=20)
-    run_cmd(["whoami"], timeout=20)
+    try:
+        print("Python UID:", os.getuid())
+    except Exception as e:
+        print("Cannot get UID:", e)
 
-    sudo = shutil.which("sudo")
+    print("USER:", os.environ.get("USER"))
+    print("HOME:", os.environ.get("HOME"))
 
-    if sudo:
-        print("sudo:", sudo)
-        run_cmd(["sudo", "-n", "id"], timeout=20)
+    run_command(
+        [
+            "bash",
+            "-c",
+            (
+                "id; "
+                "echo '--- whoami ---'; "
+                "whoami; "
+                "echo '--- sudo ---'; "
+                "command -v sudo || true; "
+                "echo '--- sudo id ---'; "
+                "sudo -n id 2>&1 || true"
+            )
+        ],
+        timeout=30
+    )
 
-    if os.getuid() == 0:
-        print("ROOT STATUS: ROOT")
-    else:
+    try:
+
+        if os.getuid() == 0:
+            print("ROOT STATUS: ROOT")
+            return True
+
         print("ROOT STATUS: NOT ROOT")
+        return False
+
+    except Exception:
+
+        return False
 
 
-# =========================================================
+# ============================================================
 # SPOTDL SETUP
-# =========================================================
+# ============================================================
 
 def setup_spotdl():
-    print("\n" + "=" * 60)
-    print("SPOTDL SETUP")
-    print("=" * 60)
 
-    os.makedirs(BASE_DIR, exist_ok=True)
+    print()
+    print("========== SPOTDL SETUP ==========")
 
-    # -----------------------------------------------------
-    # Create isolated venv
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # Create virtual environment
+    # --------------------------------------------------------
 
-    if not os.path.exists(SPOTDL_PYTHON):
-        print("Creating isolated spotDL virtual environment...")
+    if not os.path.exists(SPOTDL_VENV):
 
-        run_cmd(
+        print(
+            "Creating isolated spotDL virtual environment..."
+        )
+
+        result = run_command(
             [
                 sys.executable,
                 "-m",
                 "venv",
-                SPOTDL_VENV,
+                SPOTDL_VENV
             ],
-            timeout=300,
+            timeout=300
         )
 
-    # -----------------------------------------------------
-    # Upgrade pip
-    # -----------------------------------------------------
+        if result is None or result.returncode != 0:
 
-    run_cmd(
+            raise RuntimeError(
+                "Could not create spotDL virtual environment."
+            )
+
+    else:
+
+        print(
+            "spotDL virtual environment already exists."
+        )
+
+    # --------------------------------------------------------
+    # Upgrade pip / setuptools
+    # --------------------------------------------------------
+
+    print(
+        "Upgrading pip/setuptools..."
+    )
+
+    result = run_command(
         [
             SPOTDL_PYTHON,
             "-m",
             "pip",
             "install",
-            "--upgrade",
+            "-U",
             "pip",
             "setuptools",
-            "wheel",
+            "wheel"
         ],
-        timeout=600,
+        timeout=600
     )
 
-    # -----------------------------------------------------
+    if result is None or result.returncode != 0:
+
+        raise RuntimeError(
+            "pip/setuptools upgrade failed."
+        )
+
+    # --------------------------------------------------------
     # Install spotDL
-    # -----------------------------------------------------
+    # --------------------------------------------------------
 
-    print("\nInstalling spotDL 4.4.11...")
+    print(
+        "Installing spotDL 4.4.11..."
+    )
 
-    run_cmd(
+    result = run_command(
         [
             SPOTDL_PYTHON,
             "-m",
             "pip",
             "install",
             "--upgrade",
-            "git+https://github.com/TzurSoffer/spotify-downloader@29cb0b0669d5c107331b0912fdef73967b47493e",
+            SPOTDL_GIT
         ],
-        timeout=900,
+        timeout=900
     )
 
-    # -----------------------------------------------------
-    # Force known yt-dlp version
-    # -----------------------------------------------------
+    if result is None or result.returncode != 0:
 
-    print("\nInstalling yt-dlp...")
+        raise RuntimeError(
+            "spotDL installation failed."
+        )
 
-    run_cmd(
+    # --------------------------------------------------------
+    # Install yt-dlp
+    # --------------------------------------------------------
+
+    print(
+        "Installing yt-dlp "
+        + YT_DLP_VERSION
+        + "..."
+    )
+
+    result = run_command(
         [
             SPOTDL_PYTHON,
             "-m",
             "pip",
             "install",
-            "--upgrade",
-            "yt-dlp==2026.06.09",
+            "--force-reinstall",
+            "yt-dlp==" + YT_DLP_VERSION
         ],
-        timeout=600,
+        timeout=600
     )
 
-    # -----------------------------------------------------
-    # Version check
-    # -----------------------------------------------------
+    if result is None or result.returncode != 0:
 
-    print("\nChecking versions...")
+        raise RuntimeError(
+            "yt-dlp installation failed."
+        )
 
-    run_cmd(
+    # --------------------------------------------------------
+    # Verify spotDL
+    # --------------------------------------------------------
+
+    print()
+    print("========== SPOTDL VERSION ==========")
+
+    run_command(
         [
             SPOTDL_PYTHON,
             "-m",
             "spotdl",
-            "--version",
+            "--version"
         ],
-        timeout=60,
+        timeout=60
     )
 
-    run_cmd(
+    # --------------------------------------------------------
+    # Verify yt-dlp
+    # --------------------------------------------------------
+
+    print()
+    print("========== YT-DLP VERSION ==========")
+
+    run_command(
         [
             SPOTDL_PYTHON,
             "-m",
             "yt_dlp",
-            "--version",
+            "--version"
         ],
-        timeout=60,
+        timeout=60
     )
 
+    print()
+    print("spotDL isolated environment ready.")
 
-# =========================================================
+
+# ============================================================
 # FFMPEG
-# =========================================================
+# ============================================================
 
 def setup_ffmpeg():
-    print("\n" + "=" * 60)
-    print("FFMPEG SETUP")
-    print("=" * 60)
 
-    if os.path.exists(FFMPEG_PATH):
-        print("FFmpeg already exists:")
-        print(FFMPEG_PATH)
-    else:
-        print("FFmpeg not found.")
-        print("Asking spotDL to download FFmpeg...")
+    print()
+    print("========== FFMPEG ==========")
 
-        run_cmd(
-            [
-                SPOTDL_PYTHON,
-                "-m",
-                "spotdl",
-                "--download-ffmpeg",
-            ],
-            timeout=900,
+    # --------------------------------------------------------
+    # System FFmpeg
+    # --------------------------------------------------------
+
+    system_ffmpeg = shutil.which("ffmpeg")
+
+    if system_ffmpeg:
+
+        print(
+            "System FFmpeg found:"
         )
 
-    if os.path.exists(FFMPEG_PATH):
-        print("FFmpeg successfully found:")
-        print(FFMPEG_PATH)
+        print(system_ffmpeg)
 
-        # Put FFmpeg directory at the beginning of PATH
-        ffmpeg_dir = os.path.dirname(FFMPEG_PATH)
+        ffmpeg_dir = os.path.dirname(
+            system_ffmpeg
+        )
 
         os.environ["PATH"] = (
             ffmpeg_dir
@@ -248,71 +350,197 @@ def setup_ffmpeg():
             + os.environ.get("PATH", "")
         )
 
-        print("PATH updated.")
+    # --------------------------------------------------------
+    # spotDL FFmpeg
+    # --------------------------------------------------------
 
-        run_cmd(
-            [FFMPEG_PATH, "-version"],
-            timeout=30,
+    elif os.path.exists(FFMPEG_PATH):
+
+        print(
+            "spotDL FFmpeg found:"
+        )
+
+        print(FFMPEG_PATH)
+
+        ffmpeg_dir = os.path.dirname(
+            FFMPEG_PATH
+        )
+
+        os.environ["PATH"] = (
+            ffmpeg_dir
+            + os.pathsep
+            + os.environ.get("PATH", "")
+        )
+
+    # --------------------------------------------------------
+    # Download FFmpeg
+    # --------------------------------------------------------
+
+    else:
+
+        print("FFmpeg not found.")
+        print(
+            "Asking spotDL to download FFmpeg..."
+        )
+
+        result = run_command(
+            [
+                SPOTDL_PYTHON,
+                "-m",
+                "spotdl",
+                "--download-ffmpeg"
+            ],
+            timeout=900
+        )
+
+        if result is None:
+
+            print(
+                "FFmpeg download command failed."
+            )
+
+    # --------------------------------------------------------
+    # Re-check
+    # --------------------------------------------------------
+
+    if os.path.exists(FFMPEG_PATH):
+
+        print(
+            "FFmpeg available at:"
+        )
+
+        print(FFMPEG_PATH)
+
+        ffmpeg_dir = os.path.dirname(
+            FFMPEG_PATH
+        )
+
+        os.environ["PATH"] = (
+            ffmpeg_dir
+            + os.pathsep
+            + os.environ.get("PATH", "")
+        )
+
+    # --------------------------------------------------------
+    # Final test
+    # --------------------------------------------------------
+
+    final_ffmpeg = shutil.which("ffmpeg")
+
+    if final_ffmpeg:
+
+        print(
+            "FFmpeg executable:"
+        )
+
+        print(final_ffmpeg)
+
+        run_command(
+            [
+                final_ffmpeg,
+                "-version"
+            ],
+            timeout=30
         )
 
     else:
-        print("WARNING: FFmpeg still not found.")
+
+        print(
+            "WARNING: FFmpeg executable was not found in PATH."
+        )
+
+    print("======== END FFMPEG ========")
 
 
-# =========================================================
-# YOUTUBE TEST
-# =========================================================
+# ============================================================
+# DIRECT YOUTUBE / YT-DLP TEST
+# ============================================================
 
 def test_youtube():
-    print("\n" + "=" * 60)
-    print("YOUTUBE / YT-DLP TEST")
-    print("=" * 60)
 
-    test_url = "https://www.youtube.com/watch?v=0loPj-nIG7c"
+    print()
+    print(
+        "========== YOUTUBE / YT-DLP TEST =========="
+    )
+
+    test_url = (
+        "https://www.youtube.com/watch?v=0loPj-nIG7c"
+    )
+
+    print("Testing:")
+    print(test_url)
 
     env = os.environ.copy()
 
+    # Make sure spotDL FFmpeg is visible to yt-dlp
     if os.path.exists(FFMPEG_PATH):
+
+        ffmpeg_dir = os.path.dirname(
+            FFMPEG_PATH
+        )
+
         env["PATH"] = (
-            os.path.dirname(FFMPEG_PATH)
+            ffmpeg_dir
             + os.pathsep
             + env.get("PATH", "")
         )
 
-    # -----------------------------------------------------
-    # Metadata test
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # Test 1: Metadata
+    # --------------------------------------------------------
 
-    print("\nTesting YouTube metadata...")
+    print()
+    print("----- YT-DLP METADATA TEST -----")
 
-    code, output = run_cmd(
+    result = run_command(
         [
             SPOTDL_PYTHON,
             "-m",
             "yt_dlp",
             "--no-playlist",
             "--skip-download",
-            test_url,
+            test_url
         ],
-        timeout=180,
         env=env,
+        timeout=180
     )
 
-    if code == 0:
-        print("YT-DLP METADATA TEST: SUCCESS")
+    if result is not None and result.returncode == 0:
+
+        print()
+        print(
+            "YT-DLP METADATA TEST: SUCCESS"
+        )
+
     else:
-        print("YT-DLP METADATA TEST: FAILED")
 
-    # -----------------------------------------------------
-    # Actual small download test
-    # -----------------------------------------------------
+        print()
+        print(
+            "YT-DLP METADATA TEST: FAILED"
+        )
 
-    print("\nTesting actual YouTube download...")
+        return False
+
+    # --------------------------------------------------------
+    # Test 2: Actual media download
+    # --------------------------------------------------------
+
+    print()
+    print("----- YT-DLP DOWNLOAD TEST -----")
 
     test_dir = "/tmp/yt_test"
-    os.makedirs(test_dir, exist_ok=True)
 
-    code, output = run_cmd(
+    os.makedirs(
+        test_dir,
+        exist_ok=True
+    )
+
+    output_template = os.path.join(
+        test_dir,
+        "%(id)s.%(ext)s"
+    )
+
+    result = run_command(
         [
             SPOTDL_PYTHON,
             "-m",
@@ -321,187 +549,331 @@ def test_youtube():
             "-f",
             "18",
             "-o",
-            os.path.join(test_dir, "%(id)s.%(ext)s"),
-            test_url,
+            output_template,
+            test_url
         ],
-        timeout=300,
         env=env,
+        timeout=300
     )
 
-    if code == 0:
-        print("YT-DLP DOWNLOAD TEST: SUCCESS")
-    else:
-        print("YT-DLP DOWNLOAD TEST: FAILED")
+    if result is not None and result.returncode == 0:
 
-    return code == 0
-
-
-# =========================================================
-# TELEGRAM BOT LOCK
-# =========================================================
-
-def acquire_bot_lock():
-    """
-    Prevent multiple Telegram polling instances
-    inside the same Streamlit container.
-    """
-
-    lock_fp = open(LOCK_FILE, "w")
-
-    try:
-        fcntl.flock(
-            lock_fp,
-            fcntl.LOCK_EX | fcntl.LOCK_NB
+        print()
+        print(
+            "YT-DLP DOWNLOAD TEST: SUCCESS"
         )
 
-        print("Telegram bot lock acquired.")
-        return lock_fp
+        # Show downloaded file
+        try:
 
-    except BlockingIOError:
-        print("Telegram bot is already running.")
-        lock_fp.close()
-        return None
+            files = os.listdir(test_dir)
+
+            print(
+                "Downloaded files:"
+            )
+
+            for filename in files:
+                print(
+                    os.path.join(
+                        test_dir,
+                        filename
+                    )
+                )
+
+        except Exception:
+            pass
+
+        return True
+
+    print()
+    print(
+        "YT-DLP DOWNLOAD TEST: FAILED"
+    )
+
+    return False
 
 
-# =========================================================
-# BOT
-# =========================================================
+# ============================================================
+# TELEGRAM BOT
+# ============================================================
 
 def start_bot():
-    print("\n" + "=" * 60)
-    print("STARTING TELEGRAM BOT")
-    print("=" * 60)
 
-    token = os.getenv("TELEGRAM_TOKEN")
+    print()
+    print("Starting Telegram bot...")
 
-    if not token:
-        print("ERROR: TELEGRAM_TOKEN not found.")
-        return
+    try:
 
-    print("Telegram token found.")
-
-    # -----------------------------------------------------
-    # Import here so Streamlit environment stays isolated
-    # -----------------------------------------------------
-
-    from telegram.ext import (
-        Updater,
-        CommandHandler,
-        MessageHandler,
-        Filters,
-    )
-
-    def start(update, context):
-        update.message.reply_text(
-            "SPMA bot is online."
+        from telegram.ext import (
+            Updater,
+            CommandHandler,
+            MessageHandler,
+            Filters
         )
 
-    updater = Updater(
-        token=token,
-        use_context=True,
-    )
+        from dotenv import load_dotenv
 
-    dispatcher = updater.dispatcher
+        load_dotenv()
 
-    dispatcher.add_handler(
-        CommandHandler("start", start)
-    )
+        token = (
+            os.environ.get("TELEGRAM_TOKEN")
+            or st.secrets.get(
+                "TELEGRAM_TOKEN",
+                ""
+            )
+        )
 
-    updater.start_polling(
-        drop_pending_updates=True
-    )
+        if not token:
 
-    print("Telegram polling is active.")
+            raise RuntimeError(
+                "TELEGRAM_TOKEN was not found."
+            )
 
-    # IMPORTANT:
-    # Do NOT use updater.idle()
-    # because Streamlit owns the process signals.
+        print(
+            "Telegram token found."
+        )
 
-    while True:
-        time.sleep(3600)
+        # ----------------------------------------------------
+        # Updater
+        # ----------------------------------------------------
+
+        updater = Updater(
+            token=token,
+            use_context=True
+        )
+
+        dispatcher = updater.dispatcher
+
+        # ----------------------------------------------------
+        # /start
+        # ----------------------------------------------------
+
+        def start(update, context):
+
+            update.message.reply_text(
+                "🎵 SPMA\n\n"
+                "Spotify Downloader Bot is running."
+            )
+
+        dispatcher.add_handler(
+            CommandHandler(
+                "start",
+                start
+            )
+        )
+
+        # ----------------------------------------------------
+        # IMPORTANT
+        # ----------------------------------------------------
+        # Your existing Spotify handlers should be added here.
+        #
+        # Do NOT use:
+        #
+        # updater.idle()
+        #
+        # because Streamlit owns the process signals.
+        # ----------------------------------------------------
+
+        updater.start_polling(
+            drop_pending_updates=True
+        )
+
+        print()
+        print(
+            "Bot started successfully."
+        )
+
+        print(
+            "Telegram polling is active."
+        )
+
+        while True:
+
+            time.sleep(3600)
+
+    except Exception as e:
+
+        print()
+        print(
+            "TELEGRAM BOT ERROR:"
+        )
+
+        print(
+            repr(e)
+        )
 
 
-# =========================================================
-# BOT THREAD
-# =========================================================
+# ============================================================
+# START BOT ONLY ONCE
+# ============================================================
 
 def start_bot_thread():
-    global _BOT_LOCK_FP
 
-    if globals().get("_BOT_THREAD_STARTED", False):
-        print("Bot thread already started.")
+    if globals().get(
+        "_BOT_STARTED",
+        False
+    ):
+
+        print(
+            "Telegram bot already started; "
+            "not starting another instance."
+        )
+
         return
 
-    lock_fp = acquire_bot_lock()
-
-    if lock_fp is None:
-        return
-
-    _BOT_LOCK_FP = lock_fp
-
-    _BOT_THREAD_STARTED = True
+    globals()[
+        "_BOT_STARTED"
+    ] = True
 
     thread = threading.Thread(
         target=start_bot,
         daemon=True,
-        name="telegram-bot",
+        name="telegram-bot"
     )
 
     thread.start()
 
-    print("Telegram bot thread started.")
+    print(
+        "Telegram bot thread started."
+    )
 
 
-# =========================================================
+# ============================================================
 # MAIN
-# =========================================================
+# ============================================================
 
 def main():
-    print("\n")
-    print("=" * 70)
-    print("SPMA START")
-    print("=" * 70)
+
+    print()
+    print(
+        "======================================"
+    )
+
+    print(
+        "             SPMA START"
+    )
+
+    print(
+        "======================================"
+    )
+
+    # --------------------------------------------------------
+    # 1. CPU
+    # --------------------------------------------------------
 
     cpu_info()
 
-    # NO CFwarp here
-    print("\nCFwarp: DISABLED")
+    # --------------------------------------------------------
+    # 2. ROOT TEST
+    # --------------------------------------------------------
 
     root_test()
 
+    # --------------------------------------------------------
+    # 3. NO CFWARP
+    # --------------------------------------------------------
+
+    print()
+    print(
+        "CFwarp: DISABLED"
+    )
+
+    # --------------------------------------------------------
+    # 4. spotDL
+    # --------------------------------------------------------
+
     setup_spotdl()
 
+    # --------------------------------------------------------
+    # 5. FFmpeg
+    # --------------------------------------------------------
+
     setup_ffmpeg()
+
+    # --------------------------------------------------------
+    # 6. YouTube / yt-dlp
+    # --------------------------------------------------------
 
     youtube_ok = test_youtube()
 
     if not youtube_ok:
-        print("\nWARNING:")
-        print("YouTube actual download test failed.")
-        print("Bot will NOT be started until this is fixed.")
-        return
+
+        print()
+        print(
+            "WARNING: YouTube download test failed."
+        )
+
+        print(
+            "Telegram bot will still be started."
+        )
+
+    # --------------------------------------------------------
+    # 7. Telegram
+    # --------------------------------------------------------
+
+    print()
+    print(
+        "========== TELEGRAM BOT =========="
+    )
 
     start_bot_thread()
 
-    print("\n" + "=" * 70)
-    print("SPMA INITIALIZATION COMPLETE")
-    print("=" * 70)
+
+# ============================================================
+# STREAMLIT UI
+# ============================================================
+
+st.set_page_config(
+    page_title="SPMA",
+    page_icon="🎵"
+)
+
+st.title("🎵 SPMA")
+
+st.write(
+    "Spotify Downloader Bot"
+)
 
 
-# =========================================================
-# STREAMLIT
-# =========================================================
+# ============================================================
+# INITIALIZE ONLY ONCE
+# ============================================================
 
-st.title("SPMA")
+if not globals().get(
+    "_SPMA_INITIALIZED",
+    False
+):
 
-if not globals().get("_SPMA_INITIALIZED", False):
-    globals()["_SPMA_INITIALIZED"] = True
+    globals()[
+        "_SPMA_INITIALIZED"
+    ] = True
 
     try:
+
         main()
+
     except Exception as e:
-        print("\nFATAL ERROR:")
-        print(repr(e))
-        raise
+
+        print()
+        print(
+            "========== FATAL ERROR =========="
+        )
+
+        print(
+            repr(e)
+        )
+
+        print(
+            "========== END FATAL ERROR =========="
+        )
+
+        st.error(
+            "SPMA startup error: "
+            + str(e)
+        )
+
 else:
-    print("SPMA already initialized.")
+
+    print(
+        "SPMA already initialized."
+    )
