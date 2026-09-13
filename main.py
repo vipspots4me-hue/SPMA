@@ -40,6 +40,27 @@ SPOTDL_REPO = (
 
 
 # ============================================================
+# YOUTUBE SETTINGS
+# ============================================================
+
+# IMPORTANT:
+# Force web_safari so yt-dlp prefers HLS/m3u8 formats.
+#
+# Current yt-dlp PO Token documentation says web_safari can
+# provide HLS formats which currently do not require a GVS
+# PO Token.
+#
+# We deliberately DO NOT use:
+#   web_embedded
+#   android_vr
+#   visionos
+#
+YOUTUBE_EXTRACTOR_ARGS = (
+    "youtube:player_client=web_safari"
+)
+
+
+# ============================================================
 # GLOBALS
 # ============================================================
 
@@ -93,7 +114,6 @@ def run_command(cmd, timeout=300, env=None):
 
                 break
 
-            # Hard timeout
             if time.time() - start_time > timeout:
 
                 print(
@@ -249,7 +269,7 @@ def setup_spotdl():
     )
 
     # --------------------------------------------------------
-    # Create virtual environment
+    # Create venv
     # --------------------------------------------------------
 
     if not SPOTDL_PYTHON.exists():
@@ -655,7 +675,7 @@ def setup_ffmpeg():
 
 
 # ============================================================
-# COMMON YT-DLP OPTIONS
+# COMMON YT-DLP COMMAND
 # ============================================================
 
 def youtube_base_command():
@@ -667,11 +687,9 @@ def youtube_base_command():
 
         "--no-playlist",
 
-        # Do not wait forever for YouTube.
         "--socket-timeout",
         "20",
 
-        # Keep retries low during diagnostics.
         "--retries",
         "1",
 
@@ -681,9 +699,11 @@ def youtube_base_command():
         "--extractor-retries",
         "1",
 
-        # Do not sleep between requests.
         "--retry-sleep",
         "0",
+
+        "--extractor-args",
+        YOUTUBE_EXTRACTOR_ARGS,
     ]
 
     if DENO_BIN.exists():
@@ -709,14 +729,21 @@ def test_youtube_metadata():
         flush=True,
     )
 
+    print(
+        "Using YouTube client:",
+        YOUTUBE_EXTRACTOR_ARGS,
+        flush=True,
+    )
+
     cmd = youtube_base_command()
 
     cmd.extend(
         [
-            "--dump-single-json",
+            "--print",
+            "title",
+
             "--skip-download",
 
-            # Verbose output is important now.
             "--verbose",
 
             TEST_URL,
@@ -840,7 +867,7 @@ def test_youtube_audio():
 
 
 # ============================================================
-# YOUTUBE TEST
+# YOUTUBE FULL TEST
 # ============================================================
 
 def test_youtube():
@@ -858,13 +885,12 @@ def test_youtube():
     if not metadata_ok:
 
         print(
-            "\nMetadata test failed/hung.",
+            "\nMetadata test failed.",
             flush=True,
         )
 
         print(
-            "Skipping audio test because YouTube metadata "
-            "is not currently reachable.",
+            "Skipping audio test.",
             flush=True,
         )
 
@@ -1009,7 +1035,7 @@ def start_bot():
         return False
 
     # --------------------------------------------------------
-    # /start
+    # START
     # --------------------------------------------------------
 
     def start(update, context):
@@ -1029,7 +1055,7 @@ def start_bot():
             )
 
     # --------------------------------------------------------
-    # Spotify download
+    # DOWNLOAD
     # --------------------------------------------------------
 
     def download_track(update, context):
@@ -1104,15 +1130,29 @@ def start_bot():
         ]
 
         # ----------------------------------------------------
-        # Deno
+        # Force same YouTube client through yt-dlp args
         # ----------------------------------------------------
+
+        yt_args = (
+            f'--js-runtimes "deno:{DENO_BIN}" '
+            f'--extractor-args "{YOUTUBE_EXTRACTOR_ARGS}"'
+        )
 
         if DENO_BIN.exists():
 
             cmd.extend(
                 [
                     "--yt-dlp-args",
-                    f'--js-runtimes "deno:{DENO_BIN}"',
+                    yt_args,
+                ]
+            )
+
+        else:
+
+            cmd.extend(
+                [
+                    "--yt-dlp-args",
+                    f'--extractor-args "{YOUTUBE_EXTRACTOR_ARGS}"',
                 ]
             )
 
@@ -1134,7 +1174,7 @@ def start_bot():
         )
 
         # ----------------------------------------------------
-        # Search downloaded files
+        # Find audio
         # ----------------------------------------------------
 
         audio_files = []
@@ -1198,7 +1238,7 @@ def start_bot():
         )
 
         # ----------------------------------------------------
-        # Send
+        # SEND
         # ----------------------------------------------------
 
         try:
@@ -1231,7 +1271,7 @@ def start_bot():
                 pass
 
         # ----------------------------------------------------
-        # Cleanup
+        # CLEANUP
         # ----------------------------------------------------
 
         try:
@@ -1244,7 +1284,7 @@ def start_bot():
             pass
 
     # --------------------------------------------------------
-    # Updater
+    # UPDATER
     # --------------------------------------------------------
 
     try:
@@ -1408,7 +1448,7 @@ def initialize():
     start_bot_thread()
 
     # --------------------------------------------------------
-    # Summary
+    # SUMMARY
     # --------------------------------------------------------
 
     print(
