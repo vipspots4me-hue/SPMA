@@ -8,7 +8,7 @@ requests
 
 python-telegram-bot==13.14
 APScheduler==3.6.3
-setuptools==80.9.0
 
 yt-dlp==2026.06.09
+
 git+https://github.com/TzurSoffer/spotify-downloader@29cb0b0669d5c107331b0912fdef73967b47493e
