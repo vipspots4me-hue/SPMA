@@ -7,3 +7,5 @@ ytmusicapi
 spotipy
 requests
 pip
+yt-dlp==2026.06.09
+git+https://github.com/TzurSoffer/spotify-downloader@29cb0b0669d5c107331b0912fdef73967b47493e
