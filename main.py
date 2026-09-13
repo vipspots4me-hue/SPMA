@@ -1,13 +1,14 @@
+```python
 import os
 import sys
 import time
-import json
+import fcntl
 import shutil
-import signal
+import logging
 import subprocess
 import threading
-import logging
 import urllib.request
+import urllib.error
 import zipfile
 import tarfile
 from pathlib import Path
@@ -16,59 +17,128 @@ import streamlit as st
 
 
 # ============================================================
-# CONFIG
+# SPMA - FULL SELF-CONTAINED STREAMLIT VERSION
 # ============================================================
 
 BASE_DIR = Path("/mount/src/spma")
 
-BIN_DIR = BASE_DIR / ".bin"
-SPOTDL_VENV = BASE_DIR / ".spotdl_venv"
 
-SPOTDL_PYTHON = SPOTDL_VENV / "bin" / "python"
-SPOTDL_BIN = SPOTDL_VENV / "bin" / "spotdl"
+# ============================================================
+# FIXED VERSIONS
+# ============================================================
 
-BGUTIL_DIR = BASE_DIR / ".bgutil-ytdlp-pot-provider"
-BGUTIL_SERVER_DIR = BGUTIL_DIR / "server"
-BGUTIL_NODE_MODULES = BGUTIL_SERVER_DIR / "node_modules"
-BGUTIL_MAIN_TS = BGUTIL_SERVER_DIR / "src" / "main.ts"
-
-DOWNLOAD_DIR = BASE_DIR / "downloads"
-CACHE_DIR = BASE_DIR / ".spma_cache"
-
-DENO_BIN = BIN_DIR / "deno"
-FFMPEG_BIN = BIN_DIR / "ffmpeg"
-FFPROBE_BIN = BIN_DIR / "ffprobe"
-
-BGUTIL_HOST = "127.0.0.1"
-BGUTIL_PORT = 4416
-BGUTIL_URL = f"http://{BGUTIL_HOST}:{BGUTIL_PORT}"
-
-SPOTDL_GIT = (
-    "git+https://github.com/TzurSoffer/"
-    "spotify-downloader@"
-    "29cb0b0669d5c107331b0912fdef73967b47493e"
-)
-
-YT_DLP_VERSION = "2026.06.09"
-YT_DLP_EJS_VERSION = "0.8.0"
+SPOTDL_VERSION = "4.4.11"
+YTDLP_VERSION = "2026.06.09"
+YTDLP_EJS_VERSION = "0.8.0"
 BGUTIL_VERSION = "2.0.0"
 DENO_VERSION = "2.9.6"
 FFMPEG_VERSION = "7.0.2"
+
+
+SPOTDL_GIT = (
+    "git+https://github.com/TzurSoffer/"
+    "spotify-downloader"
+    "@29cb0b0669d5c107331b0912fdef73967b47493e"
+)
+
+
+# ============================================================
+# LOCAL PATHS
+# ============================================================
+
+BIN_DIR = BASE_DIR / ".bin"
+
+SPOTDL_VENV = BASE_DIR / ".spotdl_venv"
+
+SPOTDL_PYTHON = (
+    SPOTDL_VENV / "bin" / "python"
+)
+
+SPOTDL_BIN = (
+    SPOTDL_VENV / "bin" / "spotdl"
+)
+
+BGUTIL_DIR = (
+    BASE_DIR / ".bgutil-ytdlp-pot-provider"
+)
+
+BGUTIL_SERVER_DIR = (
+    BGUTIL_DIR / "server"
+)
+
+BGUTIL_NODE_MODULES = (
+    BGUTIL_SERVER_DIR / "node_modules"
+)
+
+BGUTIL_MAIN_TS = (
+    BGUTIL_SERVER_DIR / "src" / "main.ts"
+)
+
+DOWNLOAD_DIR = (
+    BASE_DIR / "downloads"
+)
+
+CACHE_DIR = (
+    BASE_DIR / ".spma_cache"
+)
+
+YOUTUBE_TEST_DIR = (
+    BASE_DIR / ".youtube_test"
+)
+
+DENO_BIN = (
+    BIN_DIR / "deno"
+)
+
+FFMPEG_BIN = (
+    BIN_DIR / "ffmpeg"
+)
+
+FFPROBE_BIN = (
+    BIN_DIR / "ffprobe"
+)
+
+
+# ============================================================
+# BGUTIL SERVER
+# ============================================================
+
+BGUTIL_HOST = "127.0.0.1"
+
+BGUTIL_PORT = 4416
+
+BGUTIL_URL = (
+    f"http://{BGUTIL_HOST}:{BGUTIL_PORT}"
+)
+
+
+# ============================================================
+# TELEGRAM LOCK
+# ============================================================
+
+BOT_LOCK_FILE = (
+    "/tmp/spma_telegram_bot.lock"
+)
+
+BOT_LOCK_FD = None
+
+TELEGRAM_UPDATER = None
+
+BGUTIL_PROCESS = None
+
+
+# ============================================================
+# YOUTUBE / YT-DLP
+# ============================================================
 
 YOUTUBE_CLIENT_ARGS = (
     "youtube:player_client=mweb;fetch_pot=always"
 )
 
 YOUTUBE_POT_ARGS = (
-    f"youtubepot-bgutilhttp:base_url={BGUTIL_URL}"
+    "youtubepot-bgutilhttp:"
+    f"base_url={BGUTIL_URL}"
 )
-
-BOT_LOCK_FILE = "/tmp/spma_telegram_bot.lock"
-BOT_LOCK_FD = None
-
-BGUTIL_PROCESS = None
-
-_SPMA_INITIALIZED = False
 
 
 # ============================================================
@@ -77,99 +147,816 @@ _SPMA_INITIALIZED = False
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format=(
+        "%(asctime)s - "
+        "%(levelname)s - "
+        "%(message)s"
+    ),
 )
 
 logger = logging.getLogger("SPMA")
 
 
 # ============================================================
-# HELPERS
+# STREAMLIT SECRETS
 # ============================================================
 
-def run_command(
-    cmd,
-    cwd=None,
-    env=None,
-    timeout=None,
-    check=True,
-    capture_output=False,
-):
-    logger.info("Running: %s", " ".join(map(str, cmd)))
+def get_secret(
+    name: str,
+    default: str = "",
+) -> str:
 
-    return subprocess.run(
-        [str(x) for x in cmd],
-        cwd=str(cwd) if cwd else None,
-        env=env,
-        timeout=timeout,
-        check=check,
-        text=True,
-        capture_output=capture_output,
+    try:
+
+        value = st.secrets.get(
+            name,
+            default,
+        )
+
+        if value is None:
+            return default
+
+        return str(value).strip()
+
+    except Exception:
+
+        return os.environ.get(
+            name,
+            default,
+        ).strip()
+
+
+TELEGRAM_TOKEN = get_secret(
+    "TELEGRAM_TOKEN"
+)
+
+SPOTIFY_CLIENT_ID = get_secret(
+    "SPOTIFY_CLIENT_ID"
+)
+
+SPOTIFY_CLIENT_SECRET = get_secret(
+    "SPOTIFY_CLIENT_SECRET"
+)
+
+
+# ============================================================
+# DIRECTORY SETUP
+# ============================================================
+
+def create_directories():
+
+    directories = [
+        BASE_DIR,
+        BIN_DIR,
+        DOWNLOAD_DIR,
+        CACHE_DIR,
+        YOUTUBE_TEST_DIR,
+    ]
+
+    for directory in directories:
+
+        directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+
+# ============================================================
+# ENVIRONMENT
+# ============================================================
+
+def configure_environment():
+
+    create_directories()
+
+    paths = [
+        str(BIN_DIR),
+        str(SPOTDL_VENV / "bin"),
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+    ]
+
+    current_path = os.environ.get(
+        "PATH",
+        "",
+    )
+
+    for item in current_path.split(":"):
+
+        if item and item not in paths:
+            paths.append(item)
+
+    os.environ["PATH"] = ":".join(paths)
+
+    # --------------------------------------------------------
+    # Spotify
+    # --------------------------------------------------------
+
+    if SPOTIFY_CLIENT_ID:
+
+        os.environ[
+            "SPOTIPY_CLIENT_ID"
+        ] = SPOTIFY_CLIENT_ID
+
+        os.environ[
+            "SPOTIFY_CLIENT_ID"
+        ] = SPOTIFY_CLIENT_ID
+
+    if SPOTIFY_CLIENT_SECRET:
+
+        os.environ[
+            "SPOTIPY_CLIENT_SECRET"
+        ] = SPOTIFY_CLIENT_SECRET
+
+        os.environ[
+            "SPOTIFY_CLIENT_SECRET"
+        ] = SPOTIFY_CLIENT_SECRET
+
+    # --------------------------------------------------------
+    # FFmpeg
+    # --------------------------------------------------------
+
+    if FFMPEG_BIN.exists():
+
+        os.environ[
+            "FFMPEG_BINARY"
+        ] = str(FFMPEG_BIN)
+
+    if FFPROBE_BIN.exists():
+
+        os.environ[
+            "FFPROBE_BINARY"
+        ] = str(FFPROBE_BIN)
+
+    # --------------------------------------------------------
+    # Deno
+    # --------------------------------------------------------
+
+    if DENO_BIN.exists():
+
+        os.environ[
+            "DENO_BINARY"
+        ] = str(DENO_BIN)
+
+    logger.info(
+        "Environment configured."
     )
 
 
-def command_exists(path):
-    return Path(path).exists() and os.access(path, os.X_OK)
+# ============================================================
+# COMMAND RUNNER
+# ============================================================
 
+def run_command(
+    command,
+    timeout=None,
+    cwd=None,
+    env=None,
+):
 
-def download_file(url, destination):
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Running: %s",
+        " ".join(
+            map(str, command)
+        ),
+    )
 
-    logger.info("Downloading: %s", url)
+    try:
 
-    urllib.request.urlretrieve(url, destination)
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+            env=env,
+        )
 
-    return destination
+        if result.stdout:
 
+            output = result.stdout
 
-def extract_zip(zip_path, destination):
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
+            if len(output) > 20000:
 
-    with zipfile.ZipFile(zip_path, "r") as z:
-        z.extractall(destination)
+                output = output[-20000:]
 
+            logger.info(
+                "\n%s",
+                output,
+            )
 
-def extract_tar_xz(tar_path, destination):
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
+        return result
 
-    with tarfile.open(tar_path, "r:xz") as tar:
-        tar.extractall(destination)
+    except subprocess.TimeoutExpired:
 
+        logger.error(
+            "Command timed out."
+        )
 
-def ensure_dir(path):
-    Path(path).mkdir(parents=True, exist_ok=True)
+        return None
+
+    except Exception as exc:
+
+        logger.exception(
+            "Command failed: %s",
+            exc,
+        )
+
+        return None
 
 
 # ============================================================
-# PYTHON / PIP
+# DOWNLOAD FILE
 # ============================================================
 
-def ensure_spotdl_environment():
+def download_file(
+    url: str,
+    destination: Path,
+    timeout: int = 600,
+):
 
-    ensure_dir(BASE_DIR)
-    ensure_dir(BIN_DIR)
-    ensure_dir(DOWNLOAD_DIR)
-    ensure_dir(CACHE_DIR)
+    destination.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    temp_file = Path(
+        str(destination) + ".tmp"
+    )
+
+    if temp_file.exists():
+
+        try:
+            temp_file.unlink()
+        except Exception:
+            pass
+
+    logger.info(
+        "Downloading: %s",
+        url,
+    )
+
+    try:
+
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent":
+                    "Mozilla/5.0 "
+                    "(X11; Linux x86_64) "
+                    "AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) "
+                    "Chrome/140.0.0.0 "
+                    "Safari/537.36"
+            },
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=timeout,
+        ) as response:
+
+            total = response.headers.get(
+                "Content-Length"
+            )
+
+            if total:
+                total = int(total)
+
+            downloaded = 0
+
+            with open(
+                temp_file,
+                "wb",
+            ) as output:
+
+                while True:
+
+                    chunk = response.read(
+                        1024 * 1024
+                    )
+
+                    if not chunk:
+                        break
+
+                    output.write(chunk)
+
+                    downloaded += len(chunk)
+
+                    if total:
+
+                        percent = (
+                            downloaded
+                            * 100
+                            / total
+                        )
+
+                        logger.info(
+                            "Download: %.1f%%",
+                            percent,
+                        )
+
+        temp_file.replace(
+            destination
+        )
+
+        logger.info(
+            "Download complete: %s",
+            destination,
+        )
+
+        return True
+
+    except Exception as exc:
+
+        logger.warning(
+            "Python download failed: %s",
+            exc,
+        )
+
+        try:
+
+            if temp_file.exists():
+                temp_file.unlink()
+
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # Fallback to curl
+    # --------------------------------------------------------
+
+    logger.info(
+        "Trying curl fallback..."
+    )
+
+    result = run_command(
+        [
+            "curl",
+            "-L",
+            "--fail",
+            "--retry",
+            "3",
+            "--retry-delay",
+            "2",
+            "--connect-timeout",
+            "20",
+            "--max-time",
+            str(timeout),
+            "-A",
+            (
+                "Mozilla/5.0 "
+                "(X11; Linux x86_64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/140.0.0.0 "
+                "Safari/537.36"
+            ),
+            "-o",
+            str(temp_file),
+            url,
+        ],
+        timeout=timeout + 60,
+    )
+
+    if (
+        result
+        and result.returncode == 0
+        and temp_file.exists()
+        and temp_file.stat().st_size > 0
+    ):
+
+        try:
+
+            temp_file.replace(
+                destination
+            )
+
+            logger.info(
+                "Download complete with curl: %s",
+                destination,
+            )
+
+            return True
+
+        except Exception as exc:
+
+            logger.exception(
+                "Could not move downloaded file: %s",
+                exc,
+            )
+
+    try:
+
+        if temp_file.exists():
+            temp_file.unlink()
+
+    except Exception:
+        pass
+
+    logger.error(
+        "Download failed completely: %s",
+        url,
+    )
+
+    return False
+
+
+# ============================================================
+# INSTALL DENO
+# ============================================================
+
+def install_deno():
+
+    if (
+        DENO_BIN.exists()
+        and os.access(
+            DENO_BIN,
+            os.X_OK,
+        )
+    ):
+
+        result = run_command(
+            [
+                str(DENO_BIN),
+                "--version",
+            ],
+            timeout=30,
+        )
+
+        if (
+            result
+            and result.returncode == 0
+        ):
+
+            logger.info(
+                "Deno already installed."
+            )
+
+            return True
+
+    logger.info(
+        "Installing Deno %s...",
+        DENO_VERSION,
+    )
+
+    archive = (
+        CACHE_DIR
+        / f"deno-{DENO_VERSION}.zip"
+    )
+
+    # --------------------------------------------------------
+    # First source: GitHub Release
+    # This avoids the 403 encountered from dl.deno.land.
+    # --------------------------------------------------------
+
+    urls = [
+        (
+            "https://github.com/denoland/deno/"
+            "releases/download/"
+            f"v{DENO_VERSION}/"
+            "deno-x86_64-unknown-linux-gnu.zip"
+        ),
+        (
+            "https://dl.deno.land/release/"
+            f"v{DENO_VERSION}/"
+            "deno-x86_64-unknown-linux-gnu.zip"
+        ),
+    ]
+
+    downloaded = False
+
+    for url in urls:
+
+        logger.info(
+            "Trying Deno source: %s",
+            url,
+        )
+
+        if download_file(
+            url,
+            archive,
+        ):
+
+            downloaded = True
+            break
+
+    if not downloaded:
+
+        logger.error(
+            "Unable to download Deno %s.",
+            DENO_VERSION,
+        )
+
+        return False
+
+    extract_dir = (
+        CACHE_DIR
+        / f"deno-{DENO_VERSION}"
+    )
+
+    extract_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    try:
+
+        extracted = (
+            extract_dir / "deno"
+        )
+
+        if not extracted.exists():
+
+            with zipfile.ZipFile(
+                archive,
+                "r",
+            ) as zf:
+
+                zf.extractall(
+                    extract_dir
+                )
+
+        if not extracted.exists():
+
+            logger.error(
+                "Deno binary not found."
+            )
+
+            return False
+
+        shutil.copy2(
+            extracted,
+            DENO_BIN,
+        )
+
+        os.chmod(
+            DENO_BIN,
+            0o755,
+        )
+
+    except Exception as exc:
+
+        logger.exception(
+            "Deno extraction failed: %s",
+            exc,
+        )
+
+        return False
+
+    result = run_command(
+        [
+            str(DENO_BIN),
+            "--version",
+        ],
+        timeout=30,
+    )
+
+    if (
+        result
+        and result.returncode == 0
+    ):
+
+        logger.info(
+            "Deno %s: OK",
+            DENO_VERSION,
+        )
+
+        return True
+
+    logger.error(
+        "Deno verification failed."
+    )
+
+    return False
+
+
+# ============================================================
+# INSTALL FFMPEG
+# ============================================================
+
+def install_ffmpeg():
+
+    if (
+        FFMPEG_BIN.exists()
+        and FFPROBE_BIN.exists()
+        and os.access(
+            FFMPEG_BIN,
+            os.X_OK,
+        )
+    ):
+
+        result = run_command(
+            [
+                str(FFMPEG_BIN),
+                "-version",
+            ],
+            timeout=30,
+        )
+
+        if (
+            result
+            and result.returncode == 0
+        ):
+
+            logger.info(
+                "FFmpeg already installed."
+            )
+
+            return True
+
+    logger.info(
+        "Installing FFmpeg %s...",
+        FFMPEG_VERSION,
+    )
+
+    url = (
+        "https://www.johnvansickle.com/"
+        "ffmpeg/releases/"
+        "ffmpeg-7.0.2-amd64-static.tar.xz"
+    )
+
+    archive = (
+        CACHE_DIR
+        / "ffmpeg-7.0.2-amd64-static.tar.xz"
+    )
+
+    if not archive.exists():
+
+        if not download_file(
+            url,
+            archive,
+        ):
+            return False
+
+    extract_dir = (
+        CACHE_DIR
+        / "ffmpeg-7.0.2-amd64-static"
+    )
+
+    extract_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    try:
+
+        extracted_ffmpeg = (
+            extract_dir / "ffmpeg"
+        )
+
+        extracted_ffprobe = (
+            extract_dir / "ffprobe"
+        )
+
+        if (
+            not extracted_ffmpeg.exists()
+            or not extracted_ffprobe.exists()
+        ):
+
+            with tarfile.open(
+                archive,
+                "r:xz",
+            ) as tar:
+
+                tar.extractall(
+                    CACHE_DIR
+                )
+
+        if not extracted_ffmpeg.exists():
+
+            logger.error(
+                "FFmpeg binary not found."
+            )
+
+            return False
+
+        if not extracted_ffprobe.exists():
+
+            logger.error(
+                "FFprobe binary not found."
+            )
+
+            return False
+
+        shutil.copy2(
+            extracted_ffmpeg,
+            FFMPEG_BIN,
+        )
+
+        shutil.copy2(
+            extracted_ffprobe,
+            FFPROBE_BIN,
+        )
+
+        os.chmod(
+            FFMPEG_BIN,
+            0o755,
+        )
+
+        os.chmod(
+            FFPROBE_BIN,
+            0o755,
+        )
+
+    except Exception as exc:
+
+        logger.exception(
+            "FFmpeg extraction failed: %s",
+            exc,
+        )
+
+        return False
+
+    result = run_command(
+        [
+            str(FFMPEG_BIN),
+            "-version",
+        ],
+        timeout=30,
+    )
+
+    if (
+        result
+        and result.returncode == 0
+    ):
+
+        logger.info(
+            "FFmpeg %s: OK",
+            FFMPEG_VERSION,
+        )
+
+        return True
+
+    logger.error(
+        "FFmpeg verification failed."
+    )
+
+    return False
+
+
+# ============================================================
+# INSTALL SPOTDL
+# ============================================================
+
+def install_spotdl():
 
     if not SPOTDL_PYTHON.exists():
 
-        logger.info("Creating spotDL virtual environment...")
+        logger.info(
+            "Creating spotDL virtual environment..."
+        )
 
-        run_command(
+        result = run_command(
             [
                 sys.executable,
                 "-m",
                 "venv",
                 str(SPOTDL_VENV),
-            ]
+            ],
+            timeout=180,
         )
 
-    logger.info("Installing/checking spotDL stack...")
+        if (
+            result is None
+            or result.returncode != 0
+        ):
 
-    run_command(
+            logger.error(
+                "Unable to create spotDL venv."
+            )
+
+            return False
+
+    result = run_command(
+        [
+            str(SPOTDL_PYTHON),
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "pip",
+            "wheel",
+            "setuptools",
+        ],
+        timeout=300,
+    )
+
+    if (
+        result is None
+        or result.returncode != 0
+    ):
+
+        return False
+
+    logger.info(
+        "Installing spotDL %s...",
+        SPOTDL_VERSION,
+    )
+
+    result = run_command(
         [
             str(SPOTDL_PYTHON),
             "-m",
@@ -178,231 +965,315 @@ def ensure_spotdl_environment():
             "--upgrade",
             SPOTDL_GIT,
         ],
-        timeout=1200,
+        timeout=900,
     )
 
-    run_command(
+    if (
+        result is None
+        or result.returncode != 0
+    ):
+
+        logger.error(
+            "spotDL installation failed."
+        )
+
+        return False
+
+    logger.info(
+        "Pinning yt-dlp %s...",
+        YTDLP_VERSION,
+    )
+
+    result = run_command(
         [
             str(SPOTDL_PYTHON),
             "-m",
             "pip",
             "install",
             "--upgrade",
-            f"yt-dlp=={YT_DLP_VERSION}",
-            f"yt-dlp-ejs=={YT_DLP_EJS_VERSION}",
-            f"bgutil-ytdlp-pot-provider=={BGUTIL_VERSION}",
+            f"yt-dlp=={YTDLP_VERSION}",
         ],
-        timeout=1200,
+        timeout=300,
     )
 
-    logger.info("Environment configured.")
-    logger.info("spotDL: OK")
-    logger.info("spotDL Python: OK")
+    if (
+        result is None
+        or result.returncode != 0
+    ):
 
+        return False
 
-# ============================================================
-# DENO
-# ============================================================
-
-def ensure_deno():
-
-    if command_exists(DENO_BIN):
-
-        try:
-            result = run_command(
-                [
-                    str(DENO_BIN),
-                    "--version",
-                ],
-                check=False,
-                capture_output=True,
-            )
-
-            if result.returncode == 0:
-                logger.info("Deno: OK")
-                return
-
-        except Exception:
-            pass
-
-    logger.info("Installing Deno %s...", DENO_VERSION)
-
-    zip_path = BIN_DIR / f"deno-{DENO_VERSION}.zip"
-
-    url = (
-        f"https://dl.deno.land/release/v{DENO_VERSION}/"
-        "deno-x86_64-unknown-linux-gnu.zip"
+    logger.info(
+        "Installing yt-dlp-ejs %s...",
+        YTDLP_EJS_VERSION,
     )
 
-    download_file(url, zip_path)
-
-    temp_dir = BIN_DIR / "deno_extract"
-
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
-
-    extract_zip(zip_path, temp_dir)
-
-    extracted = temp_dir / "deno"
-
-    if not extracted.exists():
-        raise RuntimeError("Deno binary not found after extraction.")
-
-    shutil.move(str(extracted), str(DENO_BIN))
-    DENO_BIN.chmod(0o755)
-
-    shutil.rmtree(temp_dir, ignore_errors=True)
-    zip_path.unlink(missing_ok=True)
-
-    logger.info("Deno: OK")
-
-
-# ============================================================
-# FFMPEG
-# ============================================================
-
-def ensure_ffmpeg():
-
-    if command_exists(FFMPEG_BIN) and command_exists(FFPROBE_BIN):
-
-        try:
-            result = run_command(
-                [
-                    str(FFMPEG_BIN),
-                    "-version",
-                ],
-                check=False,
-                capture_output=True,
-            )
-
-            if result.returncode == 0:
-                logger.info("FFmpeg: OK")
-                return
-
-        except Exception:
-            pass
-
-    logger.info("Installing FFmpeg %s...", FFMPEG_VERSION)
-
-    archive = BIN_DIR / f"ffmpeg-{FFMPEG_VERSION}-amd64-static.tar.xz"
-
-    url = (
-        "https://www.johnvansickle.com/ffmpeg/releases/"
-        f"ffmpeg-{FFMPEG_VERSION}-amd64-static.tar.xz"
+    result = run_command(
+        [
+            str(SPOTDL_PYTHON),
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            f"yt-dlp-ejs=={YTDLP_EJS_VERSION}",
+        ],
+        timeout=300,
     )
 
-    download_file(url, archive)
+    if (
+        result is None
+        or result.returncode != 0
+    ):
 
-    temp_dir = BIN_DIR / "ffmpeg_extract"
+        return False
 
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
-
-    extract_tar_xz(archive, temp_dir)
-
-    extracted_dir = (
-        temp_dir /
-        f"ffmpeg-{FFMPEG_VERSION}-amd64-static"
+    logger.info(
+        "Installing bgutil plugin %s...",
+        BGUTIL_VERSION,
     )
 
-    extracted_ffmpeg = extracted_dir / "ffmpeg"
-    extracted_ffprobe = extracted_dir / "ffprobe"
+    result = run_command(
+        [
+            str(SPOTDL_PYTHON),
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            (
+                "bgutil-ytdlp-pot-provider=="
+                f"{BGUTIL_VERSION}"
+            ),
+        ],
+        timeout=300,
+    )
 
-    if not extracted_ffmpeg.exists():
-        raise RuntimeError("FFmpeg binary not found.")
+    if (
+        result is None
+        or result.returncode != 0
+    ):
 
-    if not extracted_ffprobe.exists():
-        raise RuntimeError("FFprobe binary not found.")
+        logger.error(
+            "bgutil plugin installation failed."
+        )
 
-    shutil.move(str(extracted_ffmpeg), str(FFMPEG_BIN))
-    shutil.move(str(extracted_ffprobe), str(FFPROBE_BIN))
+        return False
 
-    FFMPEG_BIN.chmod(0o755)
-    FFPROBE_BIN.chmod(0o755)
+    result = run_command(
+        [
+            str(SPOTDL_BIN),
+            "--version",
+        ],
+        timeout=30,
+    )
 
-    shutil.rmtree(temp_dir, ignore_errors=True)
-    archive.unlink(missing_ok=True)
+    if (
+        result
+        and result.returncode == 0
+    ):
 
-    logger.info("FFmpeg: OK")
+        logger.info(
+            "spotDL %s: OK",
+            SPOTDL_VERSION,
+        )
+
+    else:
+
+        logger.error(
+            "spotDL verification failed."
+        )
+
+        return False
+
+    return True
 
 
 # ============================================================
-# BGUTIL
+# INSTALL BGUTIL SOURCE
 # ============================================================
 
-def ensure_bgutil_source():
+def install_bgutil():
 
-    if BGUTIL_MAIN_TS.exists() and BGUTIL_NODE_MODULES.exists():
-        logger.info("bgutil source/dependencies: OK")
-        return
+    if (
+        BGUTIL_SERVER_DIR.exists()
+        and BGUTIL_MAIN_TS.exists()
+    ):
+
+        logger.info(
+            "bgutil source already exists."
+        )
+
+        return True
 
     if BGUTIL_DIR.exists():
-        shutil.rmtree(BGUTIL_DIR)
 
-    logger.info("Cloning bgutil %s...", BGUTIL_VERSION)
+        logger.warning(
+            "Incomplete bgutil directory found. "
+            "Removing it..."
+        )
 
-    run_command(
+        try:
+
+            shutil.rmtree(
+                BGUTIL_DIR
+            )
+
+        except Exception as exc:
+
+            logger.exception(
+                "Unable to remove old bgutil: %s",
+                exc,
+            )
+
+            return False
+
+    logger.info(
+        "Cloning bgutil %s...",
+        BGUTIL_VERSION,
+    )
+
+    result = run_command(
         [
             "git",
             "clone",
             "--single-branch",
             "--branch",
             BGUTIL_VERSION,
-            "https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git",
+            (
+                "https://github.com/"
+                "Brainicism/"
+                "bgutil-ytdlp-pot-provider.git"
+            ),
             str(BGUTIL_DIR),
         ],
-        timeout=1200,
+        timeout=300,
     )
 
-    if not BGUTIL_MAIN_TS.exists():
-        raise RuntimeError(
-            f"bgutil server source not found: {BGUTIL_MAIN_TS}"
+    if (
+        result is None
+        or result.returncode != 0
+    ):
+
+        logger.error(
+            "bgutil clone failed."
         )
 
-    logger.info("Installing bgutil Deno dependencies...")
+        return False
 
-    run_command(
+    if not BGUTIL_MAIN_TS.exists():
+
+        logger.error(
+            "bgutil main.ts not found: %s",
+            BGUTIL_MAIN_TS,
+        )
+
+        return False
+
+    logger.info(
+        "bgutil source: OK"
+    )
+
+    return True
+
+
+# ============================================================
+# INSTALL BGUTIL SERVER DEPENDENCIES
+# ============================================================
+
+def install_bgutil_dependencies():
+
+    if not BGUTIL_SERVER_DIR.exists():
+
+        logger.error(
+            "bgutil server directory missing."
+        )
+
+        return False
+
+    if (
+        BGUTIL_NODE_MODULES.exists()
+        and (
+            BGUTIL_NODE_MODULES
+            / ".deno"
+        ).exists()
+    ):
+
+        logger.info(
+            "bgutil dependencies already installed."
+        )
+
+        return True
+
+    logger.info(
+        "Installing bgutil dependencies..."
+    )
+
+    result = run_command(
         [
             str(DENO_BIN),
             "install",
             "--allow-scripts=npm:canvas",
             "--frozen",
         ],
-        cwd=BGUTIL_SERVER_DIR,
-        timeout=1200,
+        timeout=900,
+        cwd=str(BGUTIL_SERVER_DIR),
     )
 
-    logger.info("bgutil dependencies: OK")
+    if (
+        result is None
+        or result.returncode != 0
+    ):
 
+        logger.error(
+            "bgutil dependency installation failed."
+        )
+
+        return False
+
+    if not BGUTIL_NODE_MODULES.exists():
+
+        logger.error(
+            "bgutil node_modules was not created."
+        )
+
+        return False
+
+    logger.info(
+        "bgutil dependencies: OK"
+    )
+
+    return True
+
+
+# ============================================================
+# BGUTIL SERVER CHECK
+# ============================================================
 
 def is_bgutil_server_running():
 
     try:
-        req = urllib.request.Request(
-            f"{BGUTIL_URL}/ping",
-            method="GET",
-        )
 
-        with urllib.request.urlopen(req, timeout=3) as response:
-            return response.status == 200
+        with urllib.request.urlopen(
+            BGUTIL_URL + "/ping",
+            timeout=3,
+        ) as response:
+
+            if response.status == 200:
+                return True
+
+    except urllib.error.HTTPError as exc:
+
+        if exc.code == 200:
+            return True
 
     except Exception:
-        return False
+        pass
+
+    return False
 
 
-def bgutil_log_reader(process):
-
-    try:
-        for line in process.stdout:
-
-            line = line.rstrip()
-
-            if line:
-                logger.info("[bgutil] %s", line)
-
-    except Exception as e:
-        logger.debug("bgutil log reader stopped: %s", e)
-
+# ============================================================
+# START BGUTIL SERVER
+# ============================================================
 
 def start_bgutil_server():
 
@@ -410,14 +1281,35 @@ def start_bgutil_server():
 
     if is_bgutil_server_running():
 
-        logger.info("bgutil PO Token server already running.")
-        return
+        logger.info(
+            "bgutil PO Token server: already running."
+        )
 
-    ensure_bgutil_source()
+        return True
 
-    logger.info("Starting bgutil PO Token server...")
+    if not BGUTIL_MAIN_TS.exists():
 
-    cmd = [
+        logger.error(
+            "bgutil main.ts missing: %s",
+            BGUTIL_MAIN_TS,
+        )
+
+        return False
+
+    if not BGUTIL_NODE_MODULES.exists():
+
+        logger.error(
+            "bgutil node_modules missing: %s",
+            BGUTIL_NODE_MODULES,
+        )
+
+        return False
+
+    logger.info(
+        "Starting bgutil PO Token server..."
+    )
+
+    command = [
         str(DENO_BIN),
         "run",
         "--allow-env",
@@ -429,62 +1321,140 @@ def start_bgutil_server():
         str(BGUTIL_PORT),
     ]
 
-    BGUTIL_PROCESS = subprocess.Popen(
-        cmd,
-        cwd=str(BGUTIL_NODE_MODULES),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+    try:
 
-    thread = threading.Thread(
-        target=bgutil_log_reader,
-        args=(BGUTIL_PROCESS,),
+        BGUTIL_PROCESS = subprocess.Popen(
+            command,
+            cwd=str(BGUTIL_NODE_MODULES),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=os.environ.copy(),
+            bufsize=1,
+        )
+
+    except Exception as exc:
+
+        logger.exception(
+            "Could not start bgutil: %s",
+            exc,
+        )
+
+        return False
+
+    def bgutil_logger():
+
+        try:
+
+            for line in BGUTIL_PROCESS.stdout:
+
+                line = line.rstrip()
+
+                if line:
+
+                    logger.info(
+                        "[bgutil] %s",
+                        line,
+                    )
+
+        except Exception:
+            pass
+
+    threading.Thread(
+        target=bgutil_logger,
         daemon=True,
-    )
+    ).start()
 
-    thread.start()
-
-    for _ in range(30):
+    for _ in range(60):
 
         if is_bgutil_server_running():
 
-            logger.info("bgutil PO Token server: OK")
-            return
-
-        if BGUTIL_PROCESS.poll() is not None:
-
-            raise RuntimeError(
-                "bgutil server exited unexpectedly."
+            logger.info(
+                "bgutil PO Token server: OK"
             )
+
+            return True
+
+        if (
+            BGUTIL_PROCESS.poll()
+            is not None
+        ):
+
+            logger.error(
+                "bgutil process exited with code %s",
+                BGUTIL_PROCESS.returncode,
+            )
+
+            return False
 
         time.sleep(1)
 
-    raise RuntimeError(
-        "bgutil server did not start within the expected time."
+    logger.error(
+        "bgutil server did not become ready."
     )
 
+    return False
+
 
 # ============================================================
-# YT-DLP TEST
+# VERIFY YT-DLP
 # ============================================================
 
-def test_bgutil_ytdlp():
+def check_ytdlp():
 
-    logger.info("Checking yt-dlp bgutil plugin...")
+    result = run_command(
+        [
+            str(SPOTDL_PYTHON),
+            "-m",
+            "yt_dlp",
+            "--version",
+        ],
+        timeout=30,
+    )
+
+    if (
+        result
+        and result.returncode == 0
+    ):
+
+        logger.info(
+            "yt-dlp %s: OK",
+            YTDLP_VERSION,
+        )
+
+        return True
+
+    logger.error(
+        "yt-dlp verification failed."
+    )
+
+    return False
+
+
+# ============================================================
+# VERIFY BGUTIL PLUGIN
+# ============================================================
+
+def check_bgutil_plugin():
 
     test_url = (
-        "https://www.youtube.com/watch?v=0loPj-nIG7c"
+        "https://www.youtube.com/watch"
+        "?v=0loPj-nIG7c"
     )
 
-    cmd = [
+    logger.info(
+        "Checking yt-dlp bgutil plugin..."
+    )
+
+    command = [
         str(SPOTDL_PYTHON),
         "-m",
         "yt_dlp",
 
         "--no-update",
+
         "--no-playlist",
+
         "--socket-timeout",
         "20",
 
@@ -504,35 +1474,33 @@ def test_bgutil_ytdlp():
         "title",
 
         "--skip-download",
+
         "--verbose",
 
         test_url,
     ]
 
     result = run_command(
-        cmd,
-        check=False,
+        command,
         timeout=180,
-        capture_output=True,
     )
 
-    output = (result.stdout or "") + "\n" + (result.stderr or "")
+    if (
+        result
+        and result.returncode == 0
+    ):
 
-    print(output)
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            "yt-dlp bgutil test failed."
+        logger.info(
+            "YouTube mweb + bgutil test: SUCCESS"
         )
 
-    logger.info(
-        "yt-dlp %s: OK",
-        YT_DLP_VERSION,
+        return True
+
+    logger.warning(
+        "YouTube mweb + bgutil test: FAILED"
     )
 
-    logger.info(
-        "YouTube mweb + bgutil test: SUCCESS"
-    )
+    return False
 
 
 # ============================================================
@@ -542,14 +1510,6 @@ def test_bgutil_ytdlp():
 def acquire_bot_lock():
 
     global BOT_LOCK_FD
-
-    try:
-        import fcntl
-    except ImportError:
-        logger.warning(
-            "fcntl unavailable; Telegram process lock disabled."
-        )
-        return True
 
     try:
 
@@ -563,8 +1523,9 @@ def acquire_bot_lock():
             fcntl.LOCK_EX | fcntl.LOCK_NB,
         )
 
-        BOT_LOCK_FD.write(str(os.getpid()))
-        BOT_LOCK_FD.flush()
+        logger.info(
+            "Telegram bot lock acquired."
+        )
 
         return True
 
@@ -576,55 +1537,104 @@ def acquire_bot_lock():
 
         return False
 
-    except Exception as e:
+    except Exception as exc:
 
-        logger.warning(
-            "Could not acquire Telegram bot lock: %s",
-            e,
+        logger.exception(
+            "Telegram lock error: %s",
+            exc,
         )
 
         return False
 
 
 # ============================================================
-# TELEGRAM BOT
+# TELEGRAM / START
 # ============================================================
 
-def get_secret(name):
+def telegram_start(
+    update,
+    context,
+):
 
     try:
-        value = st.secrets.get(name)
 
-        if value:
-            return str(value).strip()
+        update.message.reply_text(
+            "سلام 👋\n\n"
+            "لینک آهنگ Spotify را بفرست "
+            "تا آن را به MP3 با کیفیت "
+            "320kbps تبدیل و ارسال کنم."
+        )
 
     except Exception:
-        pass
 
-    return os.environ.get(name, "").strip()
+        logger.exception(
+            "Telegram /start error."
+        )
 
 
-def find_audio_file(directory):
+# ============================================================
+# TELEGRAM / HELP
+# ============================================================
 
-    audio_extensions = {
+def telegram_help(
+    update,
+    context,
+):
+
+    try:
+
+        update.message.reply_text(
+            "لینک آهنگ Spotify را ارسال کن."
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Telegram /help error."
+        )
+
+
+# ============================================================
+# FIND AUDIO FILE
+# ============================================================
+
+def find_audio_file(
+    output_dir: Path,
+):
+
+    extensions = {
         ".mp3",
         ".m4a",
         ".opus",
-        ".ogg",
-        ".flac",
+        ".webm",
         ".wav",
-        ".aac",
+        ".flac",
+        ".ogg",
     }
 
     files = []
 
-    for path in Path(directory).rglob("*"):
+    if not output_dir.exists():
+        return None
+
+    for path in output_dir.rglob("*"):
 
         if not path.is_file():
             continue
 
-        if path.suffix.lower() in audio_extensions:
-            files.append(path)
+        if path.suffix.lower() not in extensions:
+            continue
+
+        try:
+
+            if path.stat().st_size <= 0:
+                continue
+
+        except Exception:
+
+            continue
+
+        files.append(path)
 
     if not files:
         return None
@@ -637,21 +1647,71 @@ def find_audio_file(directory):
     return files[0]
 
 
-def run_spotdl_download(
-    spotify_url,
-    output_dir,
+# ============================================================
+# DOWNLOAD SONG
+# ============================================================
+
+def download_song(
+    spotify_url: str,
+    output_dir: Path,
 ):
 
-    ensure_dir(output_dir)
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    cmd = [
+    # --------------------------------------------------------
+    # Clean old files
+    # --------------------------------------------------------
+
+    for item in output_dir.iterdir():
+
+        try:
+
+            if item.is_file():
+                item.unlink()
+
+            elif item.is_dir():
+                shutil.rmtree(item)
+
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # yt-dlp arguments
+    # --------------------------------------------------------
+
+    yt_dlp_args = (
+        "--no-update "
+        "--socket-timeout 20 "
+        "--retries 2 "
+        "--fragment-retries 2 "
+        "--extractor-retries 2 "
+        "--retry-sleep 1 "
+        f'--js-runtimes "deno:{DENO_BIN}" '
+        f'--extractor-args "{YOUTUBE_CLIENT_ARGS}" '
+        f'--extractor-args "{YOUTUBE_POT_ARGS}"'
+    )
+
+    # --------------------------------------------------------
+    # Output template
+    # --------------------------------------------------------
+
+    output_template = (
+        str(output_dir)
+        + "/{artist} - {title}.{output-ext}"
+    )
+
+    # --------------------------------------------------------
+    # spotDL command
+    # --------------------------------------------------------
+
+    command = [
         str(SPOTDL_BIN),
 
         "--output",
-        str(
-            Path(output_dir) /
-            "{artist} - {title}.{output-ext}"
-        ),
+        output_template,
 
         "--format",
         "mp3",
@@ -665,22 +1725,12 @@ def run_spotdl_download(
         "--no-cache",
 
         # IMPORTANT:
-        # spotDL 4.4.11 requires a value for --overwrite.
+        # spotDL 4.4.11 requires a value.
         "--overwrite",
         "force",
 
         "--yt-dlp-args",
-        (
-            "--no-update "
-            "--socket-timeout 20 "
-            "--retries 2 "
-            "--fragment-retries 2 "
-            "--extractor-retries 2 "
-            "--retry-sleep 1 "
-            f'--js-runtimes "deno:{DENO_BIN}" '
-            f'--extractor-args "{YOUTUBE_CLIENT_ARGS}" '
-            f'--extractor-args "{YOUTUBE_POT_ARGS}"'
-        ),
+        yt_dlp_args,
 
         spotify_url,
     ]
@@ -694,332 +1744,508 @@ def run_spotdl_download(
         spotify_url,
     )
 
+    result = run_command(
+        command,
+        timeout=600,
+    )
+
+    if result is None:
+
+        logger.error(
+            "spotDL process returned no result."
+        )
+
+        return None
+
+    if result.returncode != 0:
+
+        logger.error(
+            "spotDL exited with code %s",
+            result.returncode,
+        )
+
+    audio_file = find_audio_file(
+        output_dir
+    )
+
+    if audio_file is None:
+
+        logger.warning(
+            "No audio file found after download."
+        )
+
+        return None
+
     logger.info(
-        "Running: %s",
-        " ".join(map(str, cmd)),
+        "Audio file found: %s",
+        audio_file,
     )
-
-    result = subprocess.run(
-        cmd,
-        cwd=str(BASE_DIR),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=900,
-    )
-
-    if result.stdout:
-        logger.info("\n%s", result.stdout)
 
     logger.info(
-        "spotDL exited with code %s",
-        result.returncode,
+        "Audio size: %d bytes",
+        audio_file.stat().st_size,
     )
 
-    return result.returncode
+    return audio_file
 
+
+# ============================================================
+# TELEGRAM MESSAGE
+# ============================================================
+
+def telegram_message(
+    update,
+    context,
+):
+
+    message = (
+        update.effective_message
+    )
+
+    if message is None:
+        return
+
+    text = (
+        message.text or ""
+    ).strip()
+
+    if not text:
+        return
+
+    if (
+        "open.spotify.com/track/"
+        not in text
+    ):
+
+        try:
+
+            message.reply_text(
+                "لطفاً لینک آهنگ Spotify را ارسال کن."
+            )
+
+        except Exception:
+            pass
+
+        return
+
+    chat_id = (
+        message.chat_id
+    )
+
+    message_id = (
+        message.message_id
+    )
+
+    logger.info(
+        "New Spotify request: "
+        "chat=%s message=%s",
+        chat_id,
+        message_id,
+    )
+
+    status_message = None
+
+    try:
+
+        status_message = (
+            message.reply_text(
+                "⏳ در حال دانلود آهنگ..."
+            )
+        )
+
+    except Exception:
+        pass
+
+    output_dir = (
+        DOWNLOAD_DIR
+        / str(chat_id)
+        / str(message_id)
+    )
+
+    try:
+
+        audio_file = download_song(
+            text,
+            output_dir,
+        )
+
+        if audio_file is None:
+
+            if status_message:
+
+                try:
+
+                    status_message.edit_text(
+                        "❌ دانلود انجام نشد یا فایل صوتی پیدا نشد."
+                    )
+
+                except Exception:
+                    pass
+
+            return
+
+        if status_message:
+
+            try:
+
+                status_message.edit_text(
+                    "📤 دانلود تمام شد؛ در حال ارسال..."
+                )
+
+            except Exception:
+                pass
+
+        logger.info(
+            "Sending audio to Telegram..."
+        )
+
+        with open(
+            audio_file,
+            "rb",
+        ) as audio:
+
+            message.reply_audio(
+                audio=audio,
+                filename=audio_file.name,
+                title=audio_file.stem,
+                read_timeout=180,
+                write_timeout=180,
+                connect_timeout=60,
+            )
+
+        logger.info(
+            "Audio sent successfully."
+        )
+
+        if status_message:
+
+            try:
+                status_message.delete()
+            except Exception:
+                pass
+
+        try:
+
+            shutil.rmtree(
+                output_dir
+            )
+
+        except Exception:
+            pass
+
+    except Exception as exc:
+
+        logger.exception(
+            "Telegram processing error: %s",
+            exc,
+        )
+
+        if status_message:
+
+            try:
+
+                status_message.edit_text(
+                    "❌ هنگام دانلود یا ارسال آهنگ خطایی رخ داد."
+                )
+
+            except Exception:
+                pass
+
+
+# ============================================================
+# START TELEGRAM BOT
+# ============================================================
 
 def start_telegram_bot():
 
-    token = get_secret("TELEGRAM_TOKEN")
+    global TELEGRAM_UPDATER
 
-    if not token:
+    if not TELEGRAM_TOKEN:
 
         logger.warning(
             "TELEGRAM_TOKEN missing. "
             "Add TELEGRAM_TOKEN to Streamlit Secrets."
         )
 
-        return
+        return None
 
     if not acquire_bot_lock():
-        return
+        return None
 
     try:
 
-        from telegram import Update
         from telegram.ext import (
             Updater,
             CommandHandler,
             MessageHandler,
             Filters,
-            CallbackContext,
         )
 
-    except Exception as e:
+    except Exception as exc:
 
         logger.exception(
-            "Could not import python-telegram-bot: %s",
-            e,
+            "python-telegram-bot import failed: %s",
+            exc,
         )
 
-        return
+        return None
 
-    def start(update: Update, context: CallbackContext):
+    try:
 
-        update.message.reply_text(
-            "سلام 👋\n"
-            "لینک آهنگ Spotify را ارسال کن تا دانلود شود."
+        updater = Updater(
+            token=TELEGRAM_TOKEN,
+            use_context=True,
         )
 
-    def help_command(
-        update: Update,
-        context: CallbackContext,
-    ):
-
-        update.message.reply_text(
-            "لینک آهنگ Spotify را ارسال کن."
+        dispatcher = (
+            updater.dispatcher
         )
 
-    def handle_message(
-        update: Update,
-        context: CallbackContext,
-    ):
-
-        if not update.message:
-            return
-
-        text = update.message.text or ""
-
-        if "open.spotify.com/track/" not in text:
-
-            update.message.reply_text(
-                "لطفاً لینک آهنگ Spotify را ارسال کن."
+        dispatcher.add_handler(
+            CommandHandler(
+                "start",
+                telegram_start,
             )
-
-            return
-
-        spotify_url = text.strip()
-
-        chat_id = update.message.chat_id
-        message_id = update.message.message_id
-
-        output_dir = (
-            DOWNLOAD_DIR /
-            str(chat_id) /
-            str(message_id)
         )
 
-        ensure_dir(output_dir)
-
-        status_message = None
-
-        try:
-
-            status_message = update.message.reply_text(
-                "⏳ در حال دانلود آهنگ..."
+        dispatcher.add_handler(
+            CommandHandler(
+                "help",
+                telegram_help,
             )
-
-            return_code = run_spotdl_download(
-                spotify_url,
-                output_dir,
-            )
-
-            if return_code != 0:
-
-                logger.error(
-                    "spotDL exited with code %s",
-                    return_code,
-                )
-
-                if status_message:
-                    status_message.edit_text(
-                        "❌ دانلود انجام نشد."
-                    )
-
-                return
-
-            audio_file = find_audio_file(
-                output_dir
-            )
-
-            if not audio_file:
-
-                logger.warning(
-                    "No audio file found after download."
-                )
-
-                if status_message:
-                    status_message.edit_text(
-                        "❌ فایل صوتی بعد از دانلود پیدا نشد."
-                    )
-
-                return
-
-            logger.info(
-                "Audio file found: %s",
-                audio_file,
-            )
-
-            with open(audio_file, "rb") as audio:
-
-                update.message.reply_audio(
-                    audio=audio,
-                    filename=audio_file.name,
-                )
-
-            if status_message:
-                status_message.delete()
-
-        except subprocess.TimeoutExpired:
-
-            logger.error(
-                "spotDL download timed out."
-            )
-
-            if status_message:
-                status_message.edit_text(
-                    "❌ دانلود بیش از حد طول کشید."
-                )
-
-        except Exception as e:
-
-            logger.exception(
-                "Telegram download error: %s",
-                e,
-            )
-
-            if status_message:
-                try:
-                    status_message.edit_text(
-                        "❌ خطا هنگام دانلود."
-                    )
-                except Exception:
-                    pass
-
-        finally:
-
-            try:
-                shutil.rmtree(
-                    output_dir,
-                    ignore_errors=True,
-                )
-            except Exception:
-                pass
-
-    updater = Updater(
-        token=token,
-        use_context=True,
-    )
-
-    dispatcher = updater.dispatcher
-
-    dispatcher.add_handler(
-        CommandHandler(
-            "start",
-            start,
         )
-    )
 
-    dispatcher.add_handler(
-        CommandHandler(
-            "help",
-            help_command,
+        dispatcher.add_handler(
+            MessageHandler(
+                Filters.text
+                & ~Filters.command,
+                telegram_message,
+            )
         )
-    )
 
-    dispatcher.add_handler(
-        MessageHandler(
-            Filters.text & ~Filters.command,
-            handle_message,
+        updater.start_polling(
+            drop_pending_updates=True,
         )
-    )
 
-    updater.start_polling(
-        drop_pending_updates=True
-    )
+        TELEGRAM_UPDATER = updater
 
-    logger.info(
-        "Telegram bot started."
-    )
+        logger.info(
+            "Telegram bot started."
+        )
+
+        return updater
+
+    except Exception as exc:
+
+        logger.exception(
+            "Unable to start Telegram bot: %s",
+            exc,
+        )
+
+        return None
 
 
 # ============================================================
 # INITIALIZATION
 # ============================================================
 
-def initialize_spma():
-
-    global _SPMA_INITIALIZED
-
-    if _SPMA_INITIALIZED:
-        return
+def initialize():
 
     logger.info(
         "========================================"
     )
 
     logger.info(
-        "Initializing SPMA..."
+        "SPMA initialization started"
     )
 
-    ensure_dir(BASE_DIR)
-    ensure_dir(BIN_DIR)
-    ensure_dir(DOWNLOAD_DIR)
-    ensure_dir(CACHE_DIR)
+    logger.info(
+        "========================================"
+    )
 
-    ensure_spotdl_environment()
+    # --------------------------------------------------------
+    # 1. Environment
+    # --------------------------------------------------------
 
-    ensure_deno()
+    configure_environment()
 
-    ensure_ffmpeg()
+    # --------------------------------------------------------
+    # 2. Deno
+    # --------------------------------------------------------
 
-    start_bgutil_server()
+    deno_ok = install_deno()
 
-    test_bgutil_ytdlp()
+    if not deno_ok:
+
+        logger.error(
+            "Deno installation FAILED."
+        )
+
+    # --------------------------------------------------------
+    # 3. FFmpeg
+    # --------------------------------------------------------
+
+    ffmpeg_ok = install_ffmpeg()
+
+    if not ffmpeg_ok:
+
+        logger.error(
+            "FFmpeg installation FAILED."
+        )
+
+    # --------------------------------------------------------
+    # 4. spotDL
+    # --------------------------------------------------------
+
+    spotdl_ok = install_spotdl()
+
+    if not spotdl_ok:
+
+        logger.error(
+            "spotDL installation FAILED."
+        )
+
+    # --------------------------------------------------------
+    # 5. bgutil source
+    # --------------------------------------------------------
+
+    bgutil_source_ok = (
+        install_bgutil()
+    )
+
+    if not bgutil_source_ok:
+
+        logger.error(
+            "bgutil source installation FAILED."
+        )
+
+    # --------------------------------------------------------
+    # 6. bgutil dependencies
+    # --------------------------------------------------------
+
+    bgutil_dependencies_ok = False
+
+    if bgutil_source_ok and deno_ok:
+
+        bgutil_dependencies_ok = (
+            install_bgutil_dependencies()
+        )
+
+    # --------------------------------------------------------
+    # 7. Refresh environment
+    # --------------------------------------------------------
+
+    configure_environment()
+
+    # --------------------------------------------------------
+    # 8. Component checks
+    # --------------------------------------------------------
+
+    if SPOTDL_BIN.exists():
+
+        logger.info(
+            "spotDL: OK"
+        )
+
+    else:
+
+        logger.error(
+            "spotDL: FAILED"
+        )
+
+    if SPOTDL_PYTHON.exists():
+
+        logger.info(
+            "spotDL Python: OK"
+        )
+
+    else:
+
+        logger.error(
+            "spotDL Python: FAILED"
+        )
+
+    if FFMPEG_BIN.exists():
+
+        logger.info(
+            "FFmpeg: OK"
+        )
+
+    else:
+
+        logger.error(
+            "FFmpeg: FAILED"
+        )
+
+    if DENO_BIN.exists():
+
+        logger.info(
+            "Deno: OK"
+        )
+
+    else:
+
+        logger.error(
+            "Deno: FAILED"
+        )
+
+    # --------------------------------------------------------
+    # 9. yt-dlp
+    # --------------------------------------------------------
+
+    ytdlp_ok = False
+
+    if SPOTDL_PYTHON.exists():
+
+        ytdlp_ok = check_ytdlp()
+
+    # --------------------------------------------------------
+    # 10. bgutil server
+    # --------------------------------------------------------
+
+    bgutil_ok = False
+
+    if (
+        bgutil_source_ok
+        and bgutil_dependencies_ok
+        and deno_ok
+    ):
+
+        bgutil_ok = (
+            start_bgutil_server()
+        )
+
+    if bgutil_ok:
+
+        logger.info(
+            "bgutil PO Token: OK"
+        )
+
+    else:
+
+        logger.warning(
+            "bgutil PO Token: FAILED"
+        )
+
+    # --------------------------------------------------------
+    # 11. YouTube verification
+    # --------------------------------------------------------
+
+    if (
+        ytdlp_ok
+        and bgutil_ok
+        and deno_ok
+    ):
+
+        check_bgutil_plugin()
+
+    # --------------------------------------------------------
+    # 12. Telegram
+    # --------------------------------------------------------
 
     start_telegram_bot()
 
-    _SPMA_INITIALIZED = True
-
-    logger.info(
-        "========================================"
-    )
-
-    logger.info(
-        "SPMA initialization finished"
-    )
-
-    logger.info(
-        "========================================"
-    )
-
-
-# ============================================================
-# STREAMLIT
-# ============================================================
-
-st.set_page_config(
-    page_title="SPMA",
-    page_icon="🎵",
-)
-
-st.title("🎵 SPMA")
-
-st.write(
-    "Spotify downloader bot is running."
-)
-
-try:
-
-    initialize_spma()
-
-except Exception as e:
-
-    logger.exception(
-        "SPMA initialization failed: %s",
-        e,
-    )
-
-    st.error(
-        f"SPMA initialization failed: {e}"
-    )
-
-
-# ============================================================
-# KEEP STREAMLIT PROCESS ALIVE
-# ============================================================
-
-while True:
-
-    time.sleep(3600)
+    # --------------------------------------------------------
+    # Finished
+    # ----------------------------
+```
